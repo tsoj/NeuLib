@@ -277,7 +277,7 @@ func mseGradient*(
 
 
 
-var model = newNetwork(1000, (500, relu), (600, relu), (1, sigmoid))
+var model = newNetwork(1000, (256, relu), (256, relu), (1, sigmoid))
 echo model
 
 var
@@ -285,5 +285,9 @@ var
     backpropInfo = model.getBackpropInfo
 
 let x = model.forward(input, backpropInfo)
-model.backward(x.mseGradient(@[4.0'f32]), backpropInfo)
-#echo backpropInfo
+echo x
+for i in 0..1000:
+    backpropInfo.setZero
+    model.backward(x.mseGradient(@[1.0'f32]), backpropInfo)
+    model.addGradient(backpropInfo, 0.01'f32)
+echo model.forward(input)
