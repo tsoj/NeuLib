@@ -1,0 +1,19 @@
+
+
+
+    {.emit: ["""
+    for (size_t in = 0; in < """, layer.numInputs, """; ++in)
+        {
+            auto& in_neurons_gradient_in = """, layerBackpropInfo.inputGradient, """.p->data[in];
+#pragma omp simd reduction(+ : in_neurons_gradient_in)
+            for (size_t out = 0; out < """, layer.numOutputs, """; ++out)
+            {
+                const size_t i = out + """, layer.numOutputs, """ * in;
+                //weightsIndex(in, out, num_in_neurons, num_out_neurons);
+                """, layerBackpropInfo.paramGradient.weights, """.p->data[i] +=
+                    """, inPostActivation, """[in] * """, layerBackpropInfo.paramGradient.bias, """.p->data[out];
+                in_neurons_gradient_in +=
+                    """, layer.weights, """.p->data[i] * """, layerBackpropInfo.paramGradient.bias ,""".p->data[out];
+            }
+        }
+    """].}

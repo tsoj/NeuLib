@@ -142,6 +142,7 @@ func backward(
         layerBackpropInfo.paramGradient.bias[outNeuron] =
             layer.activation.df(layerBackpropInfo.preActivation[outNeuron]) * outGradient[outNeuron]
 
+
     for inNeuron in 0..<layer.numInputs:
         for outNeuron in 0..<layer.numOutputs:
             let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
@@ -168,11 +169,10 @@ func forwardInternal(
         backpropInfo.input = input.toSeq
 
     for i in 0..<network.layers.len:
-        var nothing: Nothing
         result = forward(
             layer = network.layers[i],
             input = if i == 0: input else: result,
-            layerBackpropInfo = when backpropInfo is Nothing: nothing else: backpropInfo.layers[i]
+            layerBackpropInfo = when backpropInfo is Nothing: backpropInfo else: backpropInfo.layers[i]
         )
 
 func forward*(

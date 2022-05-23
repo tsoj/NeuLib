@@ -1,2 +1,3 @@
-neulib
+neulib*
+!neulib.nim
 callgrind.out.*
