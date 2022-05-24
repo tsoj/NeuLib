@@ -1,3 +1,4 @@
 neulib*
 !neulib.nim
 callgrind.out.*
+mnist
