@@ -144,6 +144,10 @@ func forward(
     when layerBackpropInfo isnot Nothing:
         layerBackpropInfo.postActivation = result
 
+{.emit: ["""
+#include <omp.h>
+"""].}
+
 func backward(
     layer: Layer,
     outGradient: openArray[Float],
@@ -166,14 +170,27 @@ func backward(
         layerBackpropInfo.paramGradient.bias[outNeuron] =
             layer.activation.df(layerBackpropInfo.preActivation[outNeuron]) * outGradient[outNeuron]
 
+    # for inNeuron in 0..<layer.numInputs:
+    #     for outNeuron in 0..<layer.numOutputs:
+    #         let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
+    #         layerBackpropInfo.paramGradient.weights[i] +=
+    #             inPostActivation[inNeuron] * layerBackpropInfo.paramGradient.bias[outNeuron]
+    #         layerBackpropInfo.inputGradient[inNeuron] +=
+    #             layer.weights[i] * layerBackpropInfo.paramGradient.bias[outNeuron]
 
-    for inNeuron in 0..<layer.numInputs:
-        for outNeuron in 0..<layer.numOutputs:
-            let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
-            layerBackpropInfo.paramGradient.weights[i] +=
-                inPostActivation[inNeuron] * layerBackpropInfo.paramGradient.bias[outNeuron]
-            layerBackpropInfo.inputGradient[inNeuron] +=
-                layer.weights[i] * layerBackpropInfo.paramGradient.bias[outNeuron]
+    {.emit: ["""
+    for(size_t inNeuron = 0; inNeuron < """, layer.numInputs, """; ++inNeuron){
+        auto& in_neurons_gradient_in = """, layerBackpropInfo.inputGradient, """.p->data[inNeuron];
+        #pragma omp simd reduction(+ : in_neurons_gradient_in)
+        for(size_t outNeuron = 0; outNeuron < """, layer.numOutputs, """; ++outNeuron){
+            const size_t i = outNeuron + """, layer.numOutputs, """ * inNeuron;
+            """, layerBackpropInfo.paramGradient.weights, """.p->data[i] +=
+                """, inPostActivation, """[inNeuron] * """, layerBackpropInfo.paramGradient.bias, """.p->data[outNeuron];
+            in_neurons_gradient_in +=
+                """, layer.weights, """.p->data[i] * """, layerBackpropInfo.paramGradient.bias, """.p->data[outNeuron];
+        }
+    }    
+    """].}
 
 func forwardInternal(
     network: Network,

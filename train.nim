@@ -39,3 +39,14 @@ for epoch in 0..<10:
         model.addGradient(backpropInfo, -0.2)
 
     echo "Finished epoch ", epoch, " in ", now() - start
+
+
+    var numCorrect = 0
+    doAssert testX.len == testY.len
+    for i in 0..<testX.len:
+        let output = model.forward(testX[i])
+        if output.maxIndex == testY[i].maxIndex:
+            numCorrect += 1
+    echo "Neural net decided ", 100.0 * numCorrect.float / testX.len.float, " % test cases correctly."
+
+         
