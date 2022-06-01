@@ -1,8 +1,13 @@
-import neulib, mnist
+import neulib, mnist, framebuffer
 
-import sequtils, random, times
+import sequtils, random, times, os
 
-var model = newNetwork(28*28, (40, relu), (40, relu), (10, sigmoid))
+var model = newNetwork(
+    (28*28, identity),
+    (40, relu),
+    (40, relu),
+    (10, sigmoid)
+)
 
 let batchSize = 15
 
@@ -50,3 +55,17 @@ for epoch in 0..<10:
     echo "Neural net decided ", 100.0 * numCorrect.float / testX.len.float, " % test cases correctly."
 
          
+var fb = newFramebuffer()
+
+for i in 0..<testImages.len:
+    fb.add(
+        imageToRuneBox(testImages[i], testLabels[i]),
+        x = 0, y = 1
+    )
+    let guess = model.forward(testImages[i].toSeq(Float)).maxIndex
+    fb.add(("Guessed number: " & $guess).toRunes, 0, 0)
+
+
+
+    fb.print()
+    sleep(2000)

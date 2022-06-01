@@ -2,6 +2,8 @@ import
     terminal,
     unicode
 
+export unicode
+
 func toRune*(s: string): Rune =
     doAssert s.runeLen == 1
     s.runeAt(0)

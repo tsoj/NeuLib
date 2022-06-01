@@ -1,5 +1,4 @@
-import streams, endians, unicode, sequtils, random, os
-import framebuffer
+import streams, endians, unicode, sequtils, os
 
 proc readInt32BE(stream: Stream): int32 {.inline.}=
   var rawBytes = stream.readInt32
@@ -37,7 +36,7 @@ proc loadLabels(filename: string): seq[uint8] =
     result = newSeq[uint8](numLabels)
     discard stream.readData(addr result[0], result.len * sizeof result[0])
 
-func imageToRuneBox(image: Image, label: uint8): seq[seq[Rune]] =
+func imageToRuneBox*(image: Image, label: uint8): seq[seq[Rune]] =
     result = newSeq[seq[Rune]](29)
     for h in 0..<28:
         result[h] = newSeq[Rune](28)
@@ -45,7 +44,7 @@ func imageToRuneBox(image: Image, label: uint8): seq[seq[Rune]] =
             result[h][w] = " ░▒▓█".toRunes[image[h][w] div (uint8.high div 4)]
     result[^1] = ($label).toRunes
 
-func toSeq(image: Image, T: typedesc): seq[T] =
+func toSeq*(image: Image, T: typedesc): seq[T] =
     for h in 0..<28:
         for w in 0..<28:
             result.add(image[h][w].T / uint8.high.T)
@@ -67,24 +66,5 @@ let
     testLabels* = loadLabels("./mnist_data/t10k-labels-idx1-ubyte")
 
 doAssert trainImages.len == trainLabels.len
-doAssert testImages.len == testLabels.len        
-
-when isMainModule:
-
-    var fb = newFramebuffer()
-
-    let
-        images = testImages
-        labels = testLabels
-
-    var shuffledIndices = (0..<images.len).toSeq
-    shuffledIndices.shuffle
-    for i in shuffledIndices:
-        fb.add(
-            imageToRuneBox(images[i], labels[i]),
-            0,0
-        )
-
-        fb.print()
-
-        sleep(1000)
+doAssert testImages.len == testLabels.len
+    

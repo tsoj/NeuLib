@@ -29,6 +29,68 @@ type
         input: seq[Float]
         numSummedGradients: int
 
+const sigmoid* = ActivationFunction(
+    f: proc(x: Float): Float = 1.Float / (1.Float + exp(-x)),
+    df: proc(x: Float): Float =
+        let t = 1.Float / (1.Float + exp(-x))
+        t * (1.Float - t),
+    name: "sigmoid"
+)
+
+const softplus* = ActivationFunction(
+    f: proc(x: Float): Float = ln(1.Float + exp(x)),
+    df: proc(x: Float): Float = 1.Float / (1.Float + exp(-x)),
+    name: "softplus"
+)
+
+const silu* = ActivationFunction(
+    f: proc(x: Float): Float = x / (1.Float + exp(-x)),
+    df: proc(x: Float): Float = (1.Float + exp(-x) + x * exp(-x)) / pow(1.Float + exp(-x), 2.Float),
+    name: "silu"
+)
+
+const relu* = ActivationFunction(
+    f: proc(x: Float): Float = (if x > 0: x else: 0.Float),
+    df: proc(x: Float): Float = (if x > 0: 1.Float else: 0.Float),
+    name: "relu"
+)
+
+const elu* = ActivationFunction(
+    f: proc(x: Float): Float = (if x > 0: x else: exp(x) - 1.Float),
+    df: proc(x: Float): Float = (if x > 0: 1.Float else: exp(x)),
+    name: "elu"
+)
+
+func leakyRelu*(a: Float = 0.01): ActivationFunction = ActivationFunction(
+    f: proc(x: Float): Float = (if x > 0: x else: a * x),
+    df: proc(x: Float): Float = (if x > 0: 1.Float else: a),
+    name: "leakyRelu"
+)
+
+const identity* = ActivationFunction(
+    f: proc(x: Float): Float = x,
+    df: proc(x: Float): Float = 1.Float,
+    name: "identity"
+)
+
+const tanh* = ActivationFunction(
+    f: proc(x: Float): Float = tanh(x),
+    df: proc(x: Float): Float = 1.Float - pow(tanh(x), 2.Float),
+    name: "tanh"
+)
+
+func mseGradient*(
+    target: openArray[Float],
+    output: openArray[Float]
+): seq[Float] =
+    result = newSeq[Float](target.len)
+
+    assert target.len == output.len, "target.len: " & $target.len & ", output.len: " & $output.len
+    assert output.len == result.len
+
+    for i in 0..<target.len:
+        result[i] = 2.Float * (output[i] - target[i])
+
 func setZero(s: var seq[Float]) =
     for v in s.mitems:
         v = 0
@@ -97,12 +159,13 @@ func initKaimingNormal*(network: var Network) =
                 v = generateGaussianNoise(mu = 0.Float, sigma = std)
     
 
-func newNetwork*(numInputs: int, layers: varargs[tuple[numNeurons: int, activation: ActivationFunction]]): Network =
-    assert layers.len >= 2, "Network needs at least one input layer and one output layer"
+func newNetwork*(layers: varargs[tuple[numNeurons: int, activation: ActivationFunction]]): Network =
+    doAssert layers.len >= 2, "Network needs at least one input layer and one output layer"
+    doAssert layers[0].activation == identity, "Only identity as activation for the input is supported"
 
-    for i in 0..<layers.len:
+    for i in 1..<layers.len:
         result.layers.add(newLayer(
-            numInputs = if i == 0: numInputs else: layers[i-1].numNeurons,
+            numInputs = layers[i-1].numNeurons,
             numOutputs = layers[i].numNeurons,
             activation = layers[i].activation
         ))
@@ -123,7 +186,7 @@ func weightIndex(inNeuron, outNeuron, numInputs, numOutputs: int): int =
 
     outNeuron + numOutputs * inNeuron;
 
-func forward(
+func feedForwardLayer(
     layer: Layer,
     input: openArray[Float],
     layerBackpropInfo: var (Nothing or LayerBackpropInfo)
@@ -148,7 +211,7 @@ func forward(
 #include <omp.h>
 """].}
 
-func backward(
+func backPropagateLayer(
     layer: Layer,
     outGradient: openArray[Float],
     inPostActivation: openArray[Float],
@@ -180,13 +243,13 @@ func backward(
 
     {.emit: ["""
     for(size_t inNeuron = 0; inNeuron < """, layer.numInputs, """; ++inNeuron){
-        auto& in_neurons_gradient_in = """, layerBackpropInfo.inputGradient, """.p->data[inNeuron];
-        #pragma omp simd reduction(+ : in_neurons_gradient_in)
+        """, Float, """* in_neurons_gradient_in = """, layerBackpropInfo.inputGradient, """.p->data;
+        #pragma omp simd reduction(+ : in_neurons_gradient_in[inNeuron])
         for(size_t outNeuron = 0; outNeuron < """, layer.numOutputs, """; ++outNeuron){
             const size_t i = outNeuron + """, layer.numOutputs, """ * inNeuron;
             """, layerBackpropInfo.paramGradient.weights, """.p->data[i] +=
                 """, inPostActivation, """[inNeuron] * """, layerBackpropInfo.paramGradient.bias, """.p->data[outNeuron];
-            in_neurons_gradient_in +=
+            in_neurons_gradient_in[inNeuron] +=
                 """, layer.weights, """.p->data[i] * """, layerBackpropInfo.paramGradient.bias, """.p->data[outNeuron];
         }
     }    
@@ -210,7 +273,7 @@ func forwardInternal(
         backpropInfo.input = input.toSeq
 
     for i in 0..<network.layers.len:
-        result = forward(
+        result = feedForwardLayer(
             layer = network.layers[i],
             input = if i == 0: input else: result,
             layerBackpropInfo = when backpropInfo is Nothing: backpropInfo else: backpropInfo.layers[i]
@@ -241,7 +304,7 @@ func backward*(
     assert backpropInfo.layers.len == network.layers.len
 
     for i in countdown(network.layers.len - 1, 0):
-        backward(
+        backPropagateLayer(
             layer = network.layers[i],
             outGradient = if i == network.layers.len - 1: lossGradient else: backpropInfo.layers[i + 1].inputGradient,
             inPostActivation = if i == 0: backpropInfo.input else: backpropInfo.layers[i - 1].postActivation,
@@ -249,75 +312,10 @@ func backward*(
         )
 
     backpropInfo.numSummedGradients += 1
-    
 
-#[-----------------Activation Functions-----------------]#
-
-
-const sigmoid* = ActivationFunction(
-    f: proc(x: Float): Float = 1.Float / (1.Float + exp(-x)),
-    df: proc(x: Float): Float =
-        let t = 1.Float / (1.Float + exp(-x))
-        t * (1.Float - t),
-    name: "sigmoid"
-)
-
-const softplus* = ActivationFunction(
-    f: proc(x: Float): Float = ln(1.Float + exp(x)),
-    df: proc(x: Float): Float = 1.Float / (1.Float + exp(-x)),
-    name: "softplus"
-)
-
-const silu* = ActivationFunction(
-    f: proc(x: Float): Float = x / (1.Float + exp(-x)),
-    df: proc(x: Float): Float = (1.Float + exp(-x) + x * exp(-x)) / pow(1.Float + exp(-x), 2.Float),
-    name: "silu"
-)
-
-const relu* = ActivationFunction(
-    f: proc(x: Float): Float = (if x > 0: x else: 0.Float),
-    df: proc(x: Float): Float = (if x > 0: 1.Float else: 0.Float),
-    name: "relu"
-)
-
-const elu* = ActivationFunction(
-    f: proc(x: Float): Float = (if x > 0: x else: exp(x) - 1.Float),
-    df: proc(x: Float): Float = (if x > 0: 1.Float else: exp(x)),
-    name: "elu"
-)
-
-func leakyRelu*(a: Float = 0.01): ActivationFunction = ActivationFunction(
-    f: proc(x: Float): Float = (if x > 0: x else: a * x),
-    df: proc(x: Float): Float = (if x > 0: 1.Float else: a),
-    name: "leakyRelu"
-)
-
-const identity* = ActivationFunction(
-    f: proc(x: Float): Float = x,
-    df: proc(x: Float): Float = 1.Float,
-    name: "identity"
-)
-
-const tanh* = ActivationFunction(
-    f: proc(x: Float): Float = tanh(x),
-    df: proc(x: Float): Float = 1.Float - pow(tanh(x), 2.Float),
-    name: "tanh"
-)
-
-func mseGradient*(
-    target: openArray[Float],
-    output: openArray[Float]
-): seq[Float] =
-    result = newSeq[Float](target.len)
-
-    assert target.len == output.len, "target.len: " & $target.len & ", output.len: " & $output.len
-    assert output.len == result.len
-
-    for i in 0..<target.len:
-        result[i] = 2.Float * (output[i] - target[i])
 
 when isMainModule:
-    var model = newNetwork(1000, (256, relu), (256, relu), (1, sigmoid))
+    var model = newNetwork((1000, relu), (256, relu), (256, relu), (1, sigmoid))
     echo model
 
     var
