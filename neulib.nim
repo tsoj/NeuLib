@@ -1,9 +1,11 @@
 import
     math,
-    sequtils
+    sequtils,
+    random,
+    fenv
 
 type
-    Float = float32
+    Float* = float32
     ActivationFunction = object
         f: proc(x: Float): Float {.noSideEffect.}
         df: proc(x: Float): Float {.noSideEffect.}
@@ -72,6 +74,29 @@ func newLayer*(numInputs, numOutputs: int, activation: ActivationFunction): Laye
         activation: activation
     )
 
+proc generateGaussianNoise(mu: Float = 0.Float, sigma: Float = 1.Float): Float =
+    # Generates values from a normal distribution.
+    # Translated from https://en.wikipedia.org/wiki/Box%E2%80%93Muller_transform#Implementation.
+    var u1: Float
+    var u2: Float
+    while true:
+        u1 = rand(1.Float)
+        u2 = rand(1.Float)
+        if u1 > epsilon(Float): break
+    let mag: Float = sigma * sqrt(-2 * ln(u1))
+    mag * cos(2 * PI * u2) + mu
+
+func initKaimingNormal*(network: var Network) =
+    for layer in network.layers.mitems:
+        layer.bias = newSeq[Float](layer.bias.len) # set bias to zero
+
+        let std = sqrt(2.Float / layer.numInputs.Float)
+
+        for v in layer.weights.mitems:
+            {.cast(noSideEffect).}:
+                v = generateGaussianNoise(mu = 0.Float, sigma = std)
+    
+
 func newNetwork*(numInputs: int, layers: varargs[tuple[numNeurons: int, activation: ActivationFunction]]): Network =
     assert layers.len >= 2, "Network needs at least one input layer and one output layer"
 
@@ -81,6 +106,9 @@ func newNetwork*(numInputs: int, layers: varargs[tuple[numNeurons: int, activati
             numOutputs = layers[i].numNeurons,
             activation = layers[i].activation
         ))
+
+    result.initKaimingNormal()
+
 
 func `$`*(network: Network): string =
     if network.layers.len == 0:
@@ -130,13 +158,9 @@ func backward(
     assert outGradient.len == layer.numOutputs
     assert inPostActivation.len == layer.numInputs
     assert layerBackpropInfo.inputGradient.len == layer.numInputs
-    assert(block:
-        var b = true
-        for inNeuron in 0..<layer.numInputs:
-            if layerBackpropInfo.inputGradient[inNeuron] != 0:
-                b = false
-        b
-    )
+
+    for inNeuron in 0..<layer.numInputs:
+        layerBackpropInfo.inputGradient[inNeuron] = 0
 
     for outNeuron in 0..<layer.numOutputs:
         layerBackpropInfo.paramGradient.bias[outNeuron] =
@@ -245,9 +269,9 @@ const elu* = ActivationFunction(
     name: "elu"
 )
 
-const leakyRelu* = ActivationFunction(
-    f: proc(x: Float): Float = (if x > 0: x else: 0.01.Float * x),
-    df: proc(x: Float): Float = (if x > 0: 1.Float else: 0.01.Float),
+func leakyRelu*(a: Float = 0.01): ActivationFunction = ActivationFunction(
+    f: proc(x: Float): Float = (if x > 0: x else: a * x),
+    df: proc(x: Float): Float = (if x > 0: 1.Float else: a),
     name: "leakyRelu"
 )
 
@@ -269,25 +293,24 @@ func mseGradient*(
 ): seq[Float] =
     result = newSeq[Float](target.len)
 
-    assert target.len == output.len
+    assert target.len == output.len, "target.len: " & $target.len & ", output.len: " & $output.len
     assert output.len == result.len
 
     for i in 0..<target.len:
         result[i] = 2.Float * (output[i] - target[i])
 
+when isMainModule:
+    var model = newNetwork(1000, (256, relu), (256, relu), (1, sigmoid))
+    echo model
 
+    var
+        input = newSeq[Float](1000)
+        backpropInfo = model.getBackpropInfo
 
-var model = newNetwork(1000, (256, relu), (256, relu), (1, sigmoid))
-echo model
-
-var
-    input = newSeq[Float](1000)
-    backpropInfo = model.getBackpropInfo
-
-let x = model.forward(input, backpropInfo)
-echo x
-for i in 0..1000:
-    backpropInfo.setZero
-    model.backward(x.mseGradient(@[1.0'f32]), backpropInfo)
-    model.addGradient(backpropInfo, 0.01'f32)
-echo model.forward(input)
+    let x = model.forward(input, backpropInfo)
+    echo x
+    for i in 0..1000:
+        backpropInfo.setZero
+        model.backward(x.mseGradient(@[1.0'f32]), backpropInfo)
+        model.addGradient(backpropInfo, 0.01'f32)
+    echo model.forward(input)
