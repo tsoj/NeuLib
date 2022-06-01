@@ -1,8 +1,8 @@
 import neulib, mnist
 
-import sequtils, random
+import sequtils, random, times
 
-var model = newNetwork(28*28, (50, relu), (50, relu), (10, sigmoid))
+var model = newNetwork(28*28, (40, relu), (40, relu), (10, sigmoid))
 
 let batchSize = 15
 
@@ -15,7 +15,11 @@ let
 
 var backpropInfo = model.getBackpropInfo
 
+echo "Beginning with training ..."
+
 for epoch in 0..<10:
+    let start = now()
+
     var shuffledIndices = (0..<trainX.len).toSeq
     shuffledIndices.shuffle
 
@@ -34,4 +38,4 @@ for epoch in 0..<10:
             model.backward(lossGradient, backpropInfo)
         model.addGradient(backpropInfo, -0.2)
 
-    echo "Finished epoch ", epoch
+    echo "Finished epoch ", epoch, " in ", now() - start

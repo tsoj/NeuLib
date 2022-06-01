@@ -17,3 +17,22 @@
             }
         }
     """].}
+
+
+
+
+    # {.emit: ["""
+    # auto& num_in_neurons = """, layer.numInputs, """;
+    # auto& num_out_neurons = """, layer.numOutputs, """;
+    # auto& out_neurons_activation = """, result, """.p->data;
+    # auto& weights = """, layer.weights, """.p->data;
+    # auto& in_neurons_activation = """, input, """;
+    # for (size_t in = 0; in < num_in_neurons; ++in)
+    # {
+    #     for (size_t out = 0; out < num_out_neurons; ++out)
+    #     {
+    #         const size_t i = out + num_out_neurons * num_in_neurons; // TODO use weightsIndex
+    #         out_neurons_activation[out] += weights[i] * in_neurons_activation[in];
+    #     }
+    # }
+    # """].}
