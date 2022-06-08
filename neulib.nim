@@ -2,7 +2,10 @@ import
     math,
     sequtils,
     random,
-    fenv
+    fenv,
+    marshal,
+    tables,
+    locks
 
 type
     Float* = float32
@@ -29,54 +32,69 @@ type
         input: seq[Float]
         numSummedGradients: int
 
-const sigmoid* = ActivationFunction(
-    f: proc(x: Float): Float = 1.Float / (1.Float + exp(-x)),
-    df: proc(x: Float): Float =
+var
+    activationFunctions: Table[string, ActivationFunction]
+    mutexAddActivationFunctions: Lock
+
+func newActivationFunction*(
+        f: proc(x: Float): Float {.noSideEffect.},
+        df: proc(x: Float): Float {.noSideEffect.},
+        name: string
+): ActivationFunction =
+    result = ActivationFunction(f: f, df: df, name: name)
+    {.cast(noSideEffect).}:
+        withLock mutexAddActivationFunctions:
+            doAssert not activationFunctions.hasKey(name), "Each activation function needs to have a unique name "
+            activationFunctions[name] = result
+
+let sigmoid* = newActivationFunction(
+    f = proc(x: Float): Float = 1.Float / (1.Float + exp(-x)),
+    df = proc(x: Float): Float =
         let t = 1.Float / (1.Float + exp(-x))
         t * (1.Float - t),
-    name: "sigmoid"
+    name = "sigmoid"
 )
 
-const softplus* = ActivationFunction(
-    f: proc(x: Float): Float = ln(1.Float + exp(x)),
-    df: proc(x: Float): Float = 1.Float / (1.Float + exp(-x)),
-    name: "softplus"
+let softplus* = newActivationFunction(
+    f = proc(x: Float): Float = ln(1.Float + exp(x)),
+    df = proc(x: Float): Float = 1.Float / (1.Float + exp(-x)),
+    name = "softplus"
 )
 
-const silu* = ActivationFunction(
-    f: proc(x: Float): Float = x / (1.Float + exp(-x)),
-    df: proc(x: Float): Float = (1.Float + exp(-x) + x * exp(-x)) / pow(1.Float + exp(-x), 2.Float),
-    name: "silu"
+let silu* = newActivationFunction(
+    f = proc(x: Float): Float = x / (1.Float + exp(-x)),
+    df = proc(x: Float): Float = (1.Float + exp(-x) + x * exp(-x)) / pow(1.Float + exp(-x), 2.Float),
+    name = "silu"
 )
 
-const relu* = ActivationFunction(
-    f: proc(x: Float): Float = (if x > 0: x else: 0.Float),
-    df: proc(x: Float): Float = (if x > 0: 1.Float else: 0.Float),
-    name: "relu"
+let relu* = newActivationFunction(
+    f = proc(x: Float): Float = (if x > 0: x else: 0.Float),
+    df = proc(x: Float): Float = (if x > 0: 1.Float else: 0.Float),
+    name = "relu"
 )
 
-const elu* = ActivationFunction(
-    f: proc(x: Float): Float = (if x > 0: x else: exp(x) - 1.Float),
-    df: proc(x: Float): Float = (if x > 0: 1.Float else: exp(x)),
-    name: "elu"
+let elu* = newActivationFunction(
+    f = proc(x: Float): Float = (if x > 0: x else: exp(x) - 1.Float),
+    df = proc(x: Float): Float = (if x > 0: 1.Float else: exp(x)),
+    name = "elu"
 )
 
-func leakyRelu*(a: Float = 0.01): ActivationFunction = ActivationFunction(
-    f: proc(x: Float): Float = (if x > 0: x else: a * x),
-    df: proc(x: Float): Float = (if x > 0: 1.Float else: a),
-    name: "leakyRelu"
+func leakyRelu*(a: Float = 0.01): ActivationFunction = newActivationFunction(
+    f = proc(x: Float): Float = (if x > 0: x else: a * x),
+    df = proc(x: Float): Float = (if x > 0: 1.Float else: a),
+    name = "leakyRelu"
 )
 
-const identity* = ActivationFunction(
-    f: proc(x: Float): Float = x,
-    df: proc(x: Float): Float = 1.Float,
-    name: "identity"
+let identity* = newActivationFunction(
+    f = proc(x: Float): Float = x,
+    df = proc(x: Float): Float = 1.Float,
+    name = "identity"
 )
 
-const tanh* = ActivationFunction(
-    f: proc(x: Float): Float = tanh(x),
-    df: proc(x: Float): Float = 1.Float - pow(tanh(x), 2.Float),
-    name: "tanh"
+let tanh* = newActivationFunction(
+    f = proc(x: Float): Float = tanh(x),
+    df = proc(x: Float): Float = 1.Float - pow(tanh(x), 2.Float),
+    name = "tanh"
 )
 
 func mseGradient*(
@@ -159,18 +177,32 @@ func initKaimingNormal*(network: var Network) =
                 v = generateGaussianNoise(mu = 0.Float, sigma = std)
     
 
-func newNetwork*(layers: varargs[tuple[numNeurons: int, activation: ActivationFunction]]): Network =
-    doAssert layers.len >= 2, "Network needs at least one input layer and one output layer"
-    doAssert layers[0].activation == identity, "Only identity as activation for the input is supported"
+func newNetwork*(input: int, layers: varargs[tuple[numNeurons: int, activation: ActivationFunction]]): Network =
+    doAssert layers.len >= 1, "Network needs at least one layer"
 
-    for i in 1..<layers.len:
+    for i in 0..<layers.len:
         result.layers.add(newLayer(
-            numInputs = layers[i-1].numNeurons,
+            numInputs = if i == 0: input else: layers[i-1].numNeurons,
             numOutputs = layers[i].numNeurons,
             activation = layers[i].activation
         ))
 
     result.initKaimingNormal()
+
+func toJson*(network: Network): string =
+    {.cast(noSideEffect).}:
+        $$network
+
+func toNetwork*(json: string): Network =
+    {.cast(noSideEffect).}:
+        result = to[Network](json)
+        withLock mutexAddActivationFunctions:
+            for layer in result.layers.mitems:
+                doAssert(
+                    activationFunctions.hasKey(layer.activation.name),
+                    "Activation function '" & layer.activation.name & "' must be created using 'newActivationFunction'"
+                )
+                layer.activation = activationFunctions[layer.activation.name]
 
 
 func `$`*(network: Network): string =
@@ -217,7 +249,6 @@ func backPropagateLayer(
     inPostActivation: openArray[Float],
     layerBackpropInfo: var LayerBackpropInfo
 ) =
-
     assert layerBackpropInfo.paramGradient.numOutputs == layer.numOutputs
     assert layerBackpropInfo.paramGradient.bias.len == layer.numOutputs
     assert layerBackpropInfo.paramGradient.numInputs == layer.numInputs
@@ -240,13 +271,13 @@ func backPropagateLayer(
     #             inPostActivation[inNeuron] * layerBackpropInfo.paramGradient.bias[outNeuron]
     #         layerBackpropInfo.inputGradient[inNeuron] +=
     #             layer.weights[i] * layerBackpropInfo.paramGradient.bias[outNeuron]
-
+    # ^this is implemented below using OpenMP to utilize SIMD instructions
     {.emit: ["""
     for(size_t inNeuron = 0; inNeuron < """, layer.numInputs, """; ++inNeuron){
         """, Float, """* in_neurons_gradient_in = """, layerBackpropInfo.inputGradient, """.p->data;
         #pragma omp simd reduction(+ : in_neurons_gradient_in[inNeuron])
         for(size_t outNeuron = 0; outNeuron < """, layer.numOutputs, """; ++outNeuron){
-            const size_t i = outNeuron + """, layer.numOutputs, """ * inNeuron;
+            const size_t i = """, weightIndex, """(inNeuron, outNeuron, """, layer.numInputs, """,""", layer.numOutputs, """);
             """, layerBackpropInfo.paramGradient.weights, """.p->data[i] +=
                 """, inPostActivation, """[inNeuron] * """, layerBackpropInfo.paramGradient.bias, """.p->data[outNeuron];
             in_neurons_gradient_in[inNeuron] +=
@@ -279,17 +310,10 @@ func forwardInternal(
             layerBackpropInfo = when backpropInfo is Nothing: backpropInfo else: backpropInfo.layers[i]
         )
 
-func forward*(
-    network: Network,
-    input: openArray[Float],
-    backpropInfo: var BackpropInfo
-): seq[Float] =
+func forward*(network: Network, input: openArray[Float], backpropInfo: var BackpropInfo): seq[Float] =
     network.forwardInternal(input, backpropInfo)
 
-func forward*(
-    network: Network,
-    input: openArray[Float]
-): seq[Float] =
+func forward*(network: Network, input: openArray[Float]): seq[Float] =
     var nothing: Nothing
     network.forwardInternal(input, nothing)
 
@@ -298,7 +322,6 @@ func backward*(
     lossGradient: openArray[Float],
     backpropInfo: var BackpropInfo
 ) =
-
     assert network.layers.len >= 1, "Network needs at least one input layer and one output layer"
     assert lossGradient.len == network.layers[^1].numOutputs, "Loss size and output size of last layer must be the same"
     assert backpropInfo.layers.len == network.layers.len
@@ -315,17 +338,22 @@ func backward*(
 
 
 when isMainModule:
-    var model = newNetwork((1000, relu), (256, relu), (256, relu), (1, sigmoid))
-    echo model
+    var model = newNetwork(10, (2, relu))
+    let s = $$model
+    var newModel = to[Network](s)
+    echo newModel
 
-    var
-        input = newSeq[Float](1000)
-        backpropInfo = model.getBackpropInfo
+    # var model = newNetwork(1000, (256, relu), (256, relu), (1, sigmoid))
+    # echo model
 
-    let x = model.forward(input, backpropInfo)
-    echo x
-    for i in 0..1000:
-        backpropInfo.setZero
-        model.backward(x.mseGradient(@[1.0'f32]), backpropInfo)
-        model.addGradient(backpropInfo, 0.01'f32)
-    echo model.forward(input)
+    # var
+    #     input = newSeq[Float](1000)
+    #     backpropInfo = model.getBackpropInfo
+
+    # let x = model.forward(input, backpropInfo)
+    # echo x
+    # for i in 0..1000:
+    #     backpropInfo.setZero
+    #     model.backward(x.mseGradient(@[1.0'f32]), backpropInfo)
+    #     model.addGradient(backpropInfo, 0.01'f32)
+    # echo model.forward(input)

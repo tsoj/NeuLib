@@ -2,12 +2,17 @@ import neulib, mnist, framebuffer
 
 import sequtils, random, times, os
 
-var model = newNetwork(
-    (28*28, identity),
-    (40, relu),
-    (40, relu),
-    (10, sigmoid)
-)
+# var model = newNetwork(
+#     28*28,
+#     (40, relu),
+#     (40, relu),
+#     (10, sigmoid)
+# )
+
+var model = readFile("txt.txt").toNetwork
+
+
+echo model
 
 let batchSize = 15
 
@@ -29,7 +34,6 @@ for epoch in 0..<10:
     shuffledIndices.shuffle
 
     for batch in 0..<(shuffledIndices.len div batchSize):
-
         
         backpropInfo.setZero
 
@@ -52,20 +56,25 @@ for epoch in 0..<10:
         let output = model.forward(testX[i])
         if output.maxIndex == testY[i].maxIndex:
             numCorrect += 1
-    echo "Neural net decided ", 100.0 * numCorrect.float / testX.len.float, " % test cases correctly."
-
-         
-var fb = newFramebuffer()
-
-for i in 0..<testImages.len:
-    fb.add(
-        imageToRuneBox(testImages[i], testLabels[i]),
-        x = 0, y = 1
-    )
-    let guess = model.forward(testImages[i].toSeq(Float)).maxIndex
-    fb.add(("Guessed number: " & $guess).toRunes, 0, 0)
+    echo "Neural net decided ", ((10000 * numCorrect) div testX.len).float / 100.0, " % test cases correctly."
 
 
+echo model.toJson
 
-    fb.print()
-    sleep(2000)
+when false:    
+    var fb = newFramebuffer()
+
+    for i in 0..<testImages.len:
+        fb.add(
+            imageToRuneBox(testImages[i], testLabels[i]),
+            x = 0, y = 1
+        )
+        let guess = model.forward(testImages[i].toSeq(Float)).maxIndex
+        # if guess == testLabels[i].int:
+        #     continue
+        fb.add(("Guessed number: " & $guess).toRunes, 0, 0)
+
+
+
+        fb.print()
+        sleep(2000)
