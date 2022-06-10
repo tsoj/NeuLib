@@ -214,9 +214,6 @@ func `$`*(network: Network): string =
         result &= "\n" & $layer.numOutputs & " " & layer.activation.name
 
 func weightIndex(inNeuron, outNeuron, numInputs, numOutputs: int): int =
-    assert inNeuron in 0..<numInputs
-    assert outNeuron in 0..<numOutputs
-
     outNeuron + numOutputs * inNeuron;
 
 func feedForwardLayer(
@@ -224,6 +221,11 @@ func feedForwardLayer(
     input: openArray[Float],
     layerBackpropInfo: var (Nothing or LayerBackpropInfo)
 ): seq[Float] =
+
+    assert input.len == layer.numInputs
+    assert layer.bias.len == layer.numOutputs
+    assert layer.weights.len == layer.numInputs * layer.numOutputs
+
     result = layer.bias
     
     for inNeuron in 0..<layer.numInputs:
@@ -245,10 +247,14 @@ func feedForwardLayer(
     input: openArray[tuple[index: int, value: Float]],
     layerBackpropInfo: var (Nothing or LayerBackpropInfo)
 ): seq[Float] =
+
+    assert layer.bias.len == layer.numOutputs
+    assert layer.weights.len == layer.numInputs * layer.numOutputs
+
     result = layer.bias
 
     for (inNeuron, value) in input:
-        assert inNeuron in (0..<layer.numInputs)
+        assert inNeuron in 0..<layer.numInputs
         for outNeuron in 0..<layer.numOutputs:
             let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
             result[outNeuron] += layer.weights[i] * value
@@ -334,7 +340,7 @@ func backPropagateLayer(
             layer.activation.df(layerBackpropInfo.preActivation[outNeuron]) * outGradient[outNeuron]
 
     for (inNeuron, value) in inPostActivation:
-        assert inNeuron in (0..<layer.numInputs)
+        assert inNeuron in 0..<layer.numInputs
         for outNeuron in 0..<layer.numOutputs:
             let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
             layerBackpropInfo.paramGradient.weights[i] +=
@@ -355,9 +361,9 @@ func forwardInternal(
 
     result = newSeq[Float](network.layers[^1].numOutputs)
 
-    assert network.layers.len >= 1, "Network needs at least one input layer and one output layer"
-    assert result.len == network.layers[^1].numOutputs, "Output size and output size of last layer must be the same"
-    assert(
+    doAssert network.layers.len >= 1, "Network needs at least one input layer and one output layer"
+    doAssert result.len == network.layers[^1].numOutputs, "Output size and output size of last layer must be the same"
+    doAssert(
         input.len == network.layers[0].numInputs or input isnot openArray[Float],
         "Input size and input size of first layer must be the same"
     )
@@ -402,9 +408,9 @@ func backward*(
     lossGradient: openArray[Float],
     backpropInfo: var BackpropInfo
 ) =
-    assert network.layers.len >= 1, "Network needs at least one input layer and one output layer"
-    assert lossGradient.len == network.layers[^1].numOutputs, "Loss size and output size of last layer must be the same"
-    assert backpropInfo.layers.len == network.layers.len
+    doAssert network.layers.len >= 1, "Network needs at least one input layer and one output layer"
+    doAssert lossGradient.len == network.layers[^1].numOutputs, "Loss size and output size of last layer must be the same"
+    doAssert backpropInfo.layers.len == network.layers.len
 
     for i in countdown(network.layers.len - 1, 1):
         backPropagateLayer(
@@ -426,6 +432,7 @@ func backward*(
     if backpropInfo.input.len > 0:
         propagateLast(backpropInfo.input)
     else:
+        doAssert backpropInfo.sparseInput.len > 0, "BackpropInfo is not set up correctly for backpropagation"
         propagateLast(backpropInfo.sparseInput)
 
     backpropInfo.numSummedGradients += 1
