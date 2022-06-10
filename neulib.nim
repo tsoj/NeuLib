@@ -268,9 +268,10 @@ func feedForwardLayer(
     when layerBackpropInfo isnot Nothing:
         layerBackpropInfo.postActivation = result
 
-{.emit: ["""
-#include <omp.h>
-"""].}
+when defined(openmp):
+  {.passC: "-fopenmp".}
+  {.passL: "-fopenmp".}
+  {.pragma: omp, header:"omp.h".}
 
 func backPropagateLayer(
     layer: Layer,
