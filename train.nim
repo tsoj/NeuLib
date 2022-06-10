@@ -2,14 +2,24 @@ import neulib, mnist, framebuffer
 
 import sequtils, random, times, os
 
-# var model = newNetwork(
-#     28*28,
-#     (40, relu),
-#     (40, relu),
-#     (10, sigmoid)
-# )
 
-var model = readFile("txt.txt").toNetwork
+
+
+func toSparse(input: openArray[Float], margin: Float = 0.01): seq[tuple[index: int, value: Float]] =
+    for i, a in input.pairs:
+        if abs(a) > margin:
+            result.add((i, a))
+
+
+
+var model = newNetwork(
+    28*28,
+    (40, relu),
+    (40, relu),
+    (10, sigmoid)
+)
+
+# var model = readFile("txt.txt").toNetwork
 
 
 echo model
@@ -41,7 +51,7 @@ for epoch in 0..<10:
             let index = shuffledIndices[batch * batchSize + i]
 
             let 
-                output = model.forward(trainX[index], backpropInfo)
+                output = model.forward(trainX[index].toSparse, backpropInfo)
                 lossGradient = mseGradient(target = trainY[index], output = output)
 
             model.backward(lossGradient, backpropInfo)
@@ -53,7 +63,7 @@ for epoch in 0..<10:
     var numCorrect = 0
     doAssert testX.len == testY.len
     for i in 0..<testX.len:
-        let output = model.forward(testX[i])
+        let output = model.forward(testX[i].toSparse)
         if output.maxIndex == testY[i].maxIndex:
             numCorrect += 1
     echo "Neural net decided ", ((10000 * numCorrect) div testX.len).float / 100.0, " % test cases correctly."
