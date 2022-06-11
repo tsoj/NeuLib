@@ -3,9 +3,11 @@ import
     sequtils,
     random,
     fenv,
-    marshal,
+    json,
     tables,
     locks
+
+# TODO: documentation
 
 type
     Float* = float32
@@ -34,7 +36,7 @@ type
         sparseInput: seq[SparseElement]
         numSummedGradients: int
 
-#----------- Activation Functions -----------#
+#----------- Activation and Loss Functions -----------#
 
 var
     activationFunctions: Table[string, ActivationFunction]
@@ -101,9 +103,6 @@ let tanh* = newActivationFunction(
     name = "tanh"
 )
 
-#----------- Network and Gradient Stuff  -----------#
-
-
 func mseGradient*(
     target: openArray[Float],
     output: openArray[Float]
@@ -115,6 +114,8 @@ func mseGradient*(
 
     for i in 0..<target.len:
         result[i] = 2.Float * (output[i] - target[i])
+
+#----------- Network and Gradient Stuff  -----------#
 
 func setZero(s: var seq[Float]) =
     for v in s.mitems:
@@ -182,7 +183,6 @@ func initKaimingNormal*(network: var Network) =
         for v in layer.weights.mitems:
             {.cast(noSideEffect).}:
                 v = generateGaussianNoise(mu = 0.Float, sigma = std)
-    
 
 func newNetwork*(input: int, layers: varargs[tuple[numNeurons: int, activation: ActivationFunction]]): Network =
     doAssert layers.len >= 1, "Network needs at least one layer"
@@ -196,20 +196,28 @@ func newNetwork*(input: int, layers: varargs[tuple[numNeurons: int, activation: 
 
     result.initKaimingNormal()
 
-func toJson*(network: Network): string =
+func `%`*(f: proc (x: Float): Float{.closure, noSideEffect.}): JsonNode =
+  newJNull()
+  
+func initFromJson(dst: var ActivationFunction; jsonNode: JsonNode; jsonPath: var string) =
+    let name = jsonNode{"name"}.getStr()
     {.cast(noSideEffect).}:
-        $$network
-
-func toNetwork*(json: string): Network =
-    {.cast(noSideEffect).}:
-        result = to[Network](json)
         withLock mutexAddActivationFunctions:
-            for layer in result.layers.mitems:
-                doAssert(
-                    activationFunctions.hasKey(layer.activation.name),
-                    "Activation function '" & layer.activation.name & "' must be created using 'newActivationFunction'"
-                )
-                layer.activation = activationFunctions[layer.activation.name]
+            doAssert(
+                activationFunctions.hasKey(name),
+                "Activation function '" & name & "' must be created using 'newActivationFunction'"
+            )
+            dst = activationFunctions[name]
+
+func toJsonString*(network: Network): string =
+    {.cast(noSideEffect).}:
+        let a = %*(network)
+        pretty(a)
+
+func toNetwork*(jsonString: string): Network =
+    {.cast(noSideEffect).}:
+        let jsonNode = jsonString.parseJson
+    result = to(jsonNode, Network)
 
 func `$`*(network: Network): string =
     if network.layers.len == 0:

@@ -65,7 +65,7 @@ for epoch in 0..<10:
     echo "Neural net decided ", ((10000 * numCorrect) div testX.len).float / 100.0, " % test cases correctly."
 
 
-#echo model.toJson
+#echo model.toJsonString
 
 when false:    
     var fb = newFramebuffer()
