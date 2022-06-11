@@ -22,6 +22,7 @@ type
     Network* = object
         layers: seq[Layer]
     Nothing = enum a
+    SparseElement* = tuple[index: int, value: Float]
     LayerBackpropInfo = object
         paramGradient: Layer
         preActivation: seq[Float]
@@ -30,7 +31,7 @@ type
     BackpropInfo = object
         layers: seq[LayerBackpropInfo]
         input: seq[Float]
-        sparseInput: seq[tuple[index: int, value: Float]]
+        sparseInput: seq[SparseElement]
         numSummedGradients: int
 
 var
@@ -205,7 +206,6 @@ func toNetwork*(json: string): Network =
                 )
                 layer.activation = activationFunctions[layer.activation.name]
 
-
 func `$`*(network: Network): string =
     if network.layers.len == 0:
         return
@@ -215,6 +215,8 @@ func `$`*(network: Network): string =
 
 func weightIndex(inNeuron, outNeuron, numInputs, numOutputs: int): int =
     outNeuron + numOutputs * inNeuron;
+
+#----------- Feed Forward Functions -----------#
 
 func feedForwardLayer(
     layer: Layer,
@@ -244,7 +246,7 @@ func feedForwardLayer(
 
 func feedForwardLayer(
     layer: Layer,
-    input: openArray[tuple[index: int, value: Float]],
+    input: openArray[SparseElement],
     layerBackpropInfo: var (Nothing or LayerBackpropInfo)
 ): seq[Float] =
 
@@ -267,6 +269,58 @@ func feedForwardLayer(
 
     when layerBackpropInfo isnot Nothing:
         layerBackpropInfo.postActivation = result
+
+func forwardInternal(
+    network: Network,
+    input: openArray[Float] or openArray[SparseElement],
+    backpropInfo: var (BackpropInfo or Nothing)
+): seq[Float] =
+
+    result = newSeq[Float](network.layers[^1].numOutputs)
+
+    doAssert network.layers.len >= 1, "Network needs at least one input layer and one output layer"
+    doAssert result.len == network.layers[^1].numOutputs, "Output size and output size of last layer must be the same"
+    doAssert(
+        input.len == network.layers[0].numInputs or input isnot openArray[Float],
+        "Input size and input size of first layer must be the same"
+    )
+
+    when backpropInfo isnot Nothing:
+        assert backpropInfo.layers.len == network.layers.len
+        when input is openArray[Float]:
+            backpropInfo.input = input.toSeq
+        else:
+            backpropInfo.sparseInput = input.toSeq
+
+
+    result = feedForwardLayer(
+        layer = network.layers[0],
+        input = input,
+        layerBackpropInfo = when backpropInfo is Nothing: backpropInfo else: backpropInfo.layers[0]
+    )
+
+    for i in 1..<network.layers.len:
+        result = feedForwardLayer(
+            layer = network.layers[i],
+            input = result,
+            layerBackpropInfo = when backpropInfo is Nothing: backpropInfo else: backpropInfo.layers[i]
+        )
+
+func forward*(network: Network, input: openArray[Float], backpropInfo: var BackpropInfo): seq[Float] =
+    network.forwardInternal(input, backpropInfo)
+
+func forward*(network: Network, input: openArray[Float]): seq[Float] =
+    var nothing: Nothing
+    network.forwardInternal(input, nothing)
+
+func forward*(network: Network, input: openArray[SparseElement], backpropInfo: var BackpropInfo): seq[Float] =
+    network.forwardInternal(input, backpropInfo)
+
+func forward*(network: Network, input: openArray[SparseElement]): seq[Float] =
+    var nothing: Nothing
+    network.forwardInternal(input, nothing)
+
+#----------- Back Propagate Functions -----------#
 
 when defined(openmp):
   {.passC: "-fopenmp".}
@@ -321,7 +375,7 @@ func backPropagateLayer(
 func backPropagateLayer(
     layer: Layer,
     outGradient: openArray[Float],
-    inPostActivation: openArray[tuple[index: int, value: Float]],
+    inPostActivation: openArray[SparseElement],
     layerBackpropInfo: var LayerBackpropInfo,
     calcInGradient: bool = true
 ) =
@@ -330,7 +384,7 @@ func backPropagateLayer(
     assert layerBackpropInfo.paramGradient.numInputs == layer.numInputs
     assert layerBackpropInfo.paramGradient.weights.len == layer.numInputs * layer.numOutputs
     assert outGradient.len == layer.numOutputs
-    assert inPostActivation.len == layer.numInputs or inPostActivation is openArray[tuple[index: int, value: Float]]
+    assert inPostActivation.len == layer.numInputs or inPostActivation is openArray[SparseElement]
     assert layerBackpropInfo.inputGradient.len == layer.numInputs
 
     for inNeuron in 0..<layer.numInputs:
@@ -354,56 +408,6 @@ func backPropagateLayer(
                 layerBackpropInfo.inputGradient[inNeuron] +=
                     layer.weights[i] * layerBackpropInfo.paramGradient.bias[outNeuron]
 
-func forwardInternal(
-    network: Network,
-    input: openArray[Float] or openArray[tuple[index: int, value: Float]],
-    backpropInfo: var (BackpropInfo or Nothing)
-): seq[Float] =
-
-    result = newSeq[Float](network.layers[^1].numOutputs)
-
-    doAssert network.layers.len >= 1, "Network needs at least one input layer and one output layer"
-    doAssert result.len == network.layers[^1].numOutputs, "Output size and output size of last layer must be the same"
-    doAssert(
-        input.len == network.layers[0].numInputs or input isnot openArray[Float],
-        "Input size and input size of first layer must be the same"
-    )
-
-    when backpropInfo isnot Nothing:
-        assert backpropInfo.layers.len == network.layers.len
-        when input is openArray[Float]:
-            backpropInfo.input = input.toSeq
-        else:
-            backpropInfo.sparseInput = input.toSeq
-
-
-    result = feedForwardLayer(
-        layer = network.layers[0],
-        input = input,
-        layerBackpropInfo = when backpropInfo is Nothing: backpropInfo else: backpropInfo.layers[0]
-    )
-
-    for i in 1..<network.layers.len:
-        result = feedForwardLayer(
-            layer = network.layers[i],
-            input = result,
-            layerBackpropInfo = when backpropInfo is Nothing: backpropInfo else: backpropInfo.layers[i]
-        )
-
-func forward*(network: Network, input: openArray[Float], backpropInfo: var BackpropInfo): seq[Float] =
-    network.forwardInternal(input, backpropInfo)
-
-func forward*(network: Network, input: openArray[Float]): seq[Float] =
-    var nothing: Nothing
-    network.forwardInternal(input, nothing)
-
-func forward*(network: Network, input: openArray[tuple[index: int, value: Float]], backpropInfo: var BackpropInfo): seq[Float] =
-    network.forwardInternal(input, backpropInfo)
-
-func forward*(network: Network, input: openArray[tuple[index: int, value: Float]]): seq[Float] =
-    var nothing: Nothing
-    network.forwardInternal(input, nothing)
-
 func backward*(
     network: Network,
     lossGradient: openArray[Float],
@@ -411,7 +415,7 @@ func backward*(
 ) =
     doAssert network.layers.len >= 1, "Network needs at least one input layer and one output layer"
     doAssert lossGradient.len == network.layers[^1].numOutputs, "Loss size and output size of last layer must be the same"
-    doAssert backpropInfo.layers.len == network.layers.len
+    doAssert backpropInfo.layers.len == network.layers.len, "BackpropInfo is not set up correctly for backpropagation"
 
     for i in countdown(network.layers.len - 1, 1):
         backPropagateLayer(
@@ -424,7 +428,7 @@ func backward*(
     template propagateLast(input: auto) =
         backPropagateLayer(
             layer = network.layers[0],
-            outGradient = backpropInfo.layers[1].inputGradient,
+            outGradient = if backpropInfo.layers.len <= 1: lossGradient else: backpropInfo.layers[1].inputGradient,
             inPostActivation = input,
             layerBackpropInfo = backpropInfo.layers[0],
             calcInGradient = false
