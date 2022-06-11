@@ -34,6 +34,8 @@ type
         sparseInput: seq[SparseElement]
         numSummedGradients: int
 
+#----------- Activation Functions -----------#
+
 var
     activationFunctions: Table[string, ActivationFunction]
     mutexAddActivationFunctions: Lock
@@ -98,6 +100,9 @@ let tanh* = newActivationFunction(
     df = proc(x: Float): Float = 1.Float - pow(tanh(x), 2.Float),
     name = "tanh"
 )
+
+#----------- Network and Gradient Stuff  -----------#
+
 
 func mseGradient*(
     target: openArray[Float],
@@ -442,24 +447,9 @@ func backward*(
 
     backpropInfo.numSummedGradients += 1
 
+#----------- Utility Functions -----------#
 
-# when isMainModule:
-#     var model = newNetwork(10, (2, relu))
-#     let s = $$model
-#     var newModel = to[Network](s)
-#     echo newModel
-
-    # var model = newNetwork(1000, (256, relu), (256, relu), (1, sigmoid))
-    # echo model
-
-    # var
-    #     input = newSeq[Float](1000)
-    #     backpropInfo = model.getBackpropInfo
-
-    # let x = model.forward(input, backpropInfo)
-    # echo x
-    # for i in 0..1000:
-    #     backpropInfo.setZero
-    #     model.backward(x.mseGradient(@[1.0'f32]), backpropInfo)
-    #     model.addGradient(backpropInfo, 0.01'f32)
-    # echo model.forward(input)
+func toSparse*(input: openArray[Float], margin: Float = 0.01): seq[SparseElement] =
+    for i, a in input.pairs:
+        if abs(a) > margin:
+            result.add((i, a))

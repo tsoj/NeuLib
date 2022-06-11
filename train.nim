@@ -5,10 +5,6 @@ import sequtils, random, times, os
 
 
 
-func toSparse(input: openArray[Float], margin: Float = 0.01): seq[SparseElement] =
-    for i, a in input.pairs:
-        if abs(a) > margin:
-            result.add((i, a))
 
 
 
