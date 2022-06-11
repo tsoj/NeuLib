@@ -1,12 +1,6 @@
-import neulib, mnist, framebuffer
+import neulib, mnist
 
-import sequtils, random, times, os
-
-
-
-
-
-
+import sequtils, random, times, strformat
 
 var model = newNetwork(
     28*28,
@@ -53,7 +47,7 @@ for epoch in 0..<10:
             model.backward(lossGradient, backpropInfo)
         model.addGradient(backpropInfo, -0.2)
 
-    echo "Finished epoch ", epoch, " in ", now() - start
+    echo "Finished epoch ", epoch, " in ", (now() - start).inMilliseconds, " ms"
 
 
     var numCorrect = 0
@@ -62,25 +56,7 @@ for epoch in 0..<10:
         let output = model.forward(testX[i].toSparse)
         if output.maxIndex == testY[i].maxIndex:
             numCorrect += 1
-    echo "Neural net decided ", ((10000 * numCorrect) div testX.len).float / 100.0, " % test cases correctly."
+    echo "Neural net decided ", fmt"{100.0*numCorrect.float/testX.len.float:.2f}", " % test cases correctly."
 
 
 #echo model.toJsonString
-
-when false:    
-    var fb = newFramebuffer()
-
-    for i in 0..<testImages.len:
-        fb.add(
-            imageToRuneBox(testImages[i], testLabels[i]),
-            x = 0, y = 1
-        )
-        let guess = model.forward(testImages[i].toSeq(Float)).maxIndex
-        # if guess == testLabels[i].int:
-        #     continue
-        fb.add(("Guessed number: " & $guess).toRunes, 0, 0)
-
-
-
-        fb.print()
-        sleep(2000)
