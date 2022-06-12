@@ -45,7 +45,7 @@ for epoch in 0..<10:
                 lossGradient = mseGradient(target = trainY[index], output = output)
 
             model.backward(lossGradient, backpropInfo)
-        model.addGradient(backpropInfo, -0.2)
+        model.addGradient(backpropInfo, 0.2)
 
     echo "Finished epoch ", epoch, " in ", (now() - start).inMilliseconds, " ms"
 

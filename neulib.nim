@@ -7,8 +7,6 @@ import
     tables,
     locks
 
-# TODO: documentation
-
 type
     Float* = float32
     ActivationFunction = object
@@ -22,6 +20,7 @@ type
         numOutputs: int
         activation: ActivationFunction
     Network* = object
+        ## A fully connected neural network. Contains structure and parameters.
         layers: seq[Layer]
     Nothing = enum a
     SparseElement* = tuple[index: int, value: Float]
@@ -47,6 +46,11 @@ func newActivationFunction*(
         df: proc(x: Float): Float {.noSideEffect.},
         name: string
 ): ActivationFunction =
+    ## Creates and registers an activation function to be used for neural network layers.
+    ## `f` is the function, `df` is the derivative of that function, and `name` must be a unique name
+    ## for this activation function.
+    ## Cannot be run during compile time.
+
     result = ActivationFunction(f: f, df: df, name: name)
     {.cast(noSideEffect).}:
         withLock mutexAddActivationFunctions:
@@ -85,9 +89,9 @@ let elu* = newActivationFunction(
     name = "elu"
 )
 
-func leakyRelu*(a: Float = 0.01): ActivationFunction = newActivationFunction(
-    f = proc(x: Float): Float = (if x > 0: x else: a * x),
-    df = proc(x: Float): Float = (if x > 0: 1.Float else: a),
+let leakyRelu* = newActivationFunction(
+    f = proc(x: Float): Float = (if x > 0: x else: 0.01.Float * x),
+    df = proc(x: Float): Float = (if x > 0: 1.Float else: 0.01.Float),
     name = "leakyRelu"
 )
 
@@ -107,6 +111,9 @@ func mseGradient*(
     target: openArray[Float],
     output: openArray[Float]
 ): seq[Float] =
+    ## Returns the gradient of the mean squared error loss function.
+    ## `target` is the desired output vector, `output` is the actual output.
+
     result = newSeq[Float](target.len)
 
     assert target.len == output.len, "target.len: " & $target.len & ", output.len: " & $output.len
@@ -122,6 +129,8 @@ func setZero(s: var seq[Float]) =
         v = 0
 
 func setZero*(backpropInfo: var BackpropInfo) =
+    ## Resets the gradient stored in `backpropInfo` to zero.
+
     for layerBackpropInfo in backpropInfo.layers.mitems:
         layerBackpropInfo.paramGradient.bias.setZero
         layerBackpropInfo.paramGradient.weights.setZero
@@ -129,6 +138,8 @@ func setZero*(backpropInfo: var BackpropInfo) =
     backpropInfo.numSummedGradients = 0
 
 func getBackpropInfo*(network: Network): BackpropInfo =
+    ## Creates `BackpropInfo` that can be used to do backwards passes with `network`.
+
     for layer in network.layers:
         result.layers.add(LayerBackpropInfo(
             paramGradient: layer,
@@ -137,7 +148,12 @@ func getBackpropInfo*(network: Network): BackpropInfo =
     result.setZero
 
 func addGradient*(network: var Network, backpropInfo: BackpropInfo, lr: Float) =
+    ## Applies the gradient accumulated during backwards passes in `backpropInfo` to `network`.
+    ## Learning rate can be specified with `lr`.
+
     assert network.layers.len == backpropInfo.layers.len
+
+    let lr = -lr # because we want to minimize
 
     for layerIndex in 0..<network.layers.len:
         assert network.layers[layerIndex].bias.len == backpropInfo.layers[layerIndex].paramGradient.bias.len
@@ -151,7 +167,7 @@ func addGradient*(network: var Network, backpropInfo: BackpropInfo, lr: Float) =
             network.layers[layerIndex].weights[i] +=
                 (lr * backpropInfo.layers[layerIndex].paramGradient.weights[i]) / backpropInfo.numSummedGradients.Float
 
-func newLayer*(numInputs, numOutputs: int, activation: ActivationFunction): Layer =
+func newLayer(numInputs, numOutputs: int, activation: ActivationFunction): Layer =
     assert numInputs > 0 and numOutputs > 0
 
     Layer(
@@ -175,6 +191,10 @@ proc generateGaussianNoise(mu: Float = 0.Float, sigma: Float = 1.Float): Float =
     mag * cos(2 * PI * u2) + mu
 
 func initKaimingNormal*(network: var Network) =
+    ## Randomly initializes the parameters of `network` using a method described in
+    ## `"Delving Deep into Rectifiers: Surpassing Human-Level Performance on ImageNet Classification"
+    ## <https://arxiv.org/abs/1502.01852>`_.
+
     for layer in network.layers.mitems:
         layer.bias = newSeq[Float](layer.bias.len) # set bias to zero
 
@@ -185,6 +205,38 @@ func initKaimingNormal*(network: var Network) =
                 v = generateGaussianNoise(mu = 0.Float, sigma = std)
 
 func newNetwork*(input: int, layers: varargs[tuple[numNeurons: int, activation: ActivationFunction]]): Network =
+    ## Creates new instance of `Network`.
+    ## `input` is the number of input units.
+    ## `layers` describes how many neurons the following layers have and which activation function they use.
+    ## 
+    ## Example:
+    ##
+    ## .. code-block:: Nim
+    ##
+    ##   var model = newNetwork(
+    ##     784,
+    ##     (40, relu),
+    ##     (40, relu),
+    ##     (10, sigmoid)
+    ##   )
+    ## 
+    ## Describes a model that looks like this:
+    ## 
+    ## .. code-block::
+    ##   ooo ... 784 ... ooo input
+    ##    \               /  fully connected
+    ##    oo ... 40 ... oo
+    ##          relu
+    ##    oo ... 40 ... oo
+    ##     |            |    fully connected
+    ##    oo ... 40 ... oo
+    ##          relu
+    ##    oo ... 40 ... oo
+    ##      \          /     fully connected
+    ##       oooooooooo
+    ##        sigmoid
+    ##       oooooooooo      output
+
     doAssert layers.len >= 1, "Network needs at least one layer"
 
     for i in 0..<layers.len:
@@ -196,7 +248,7 @@ func newNetwork*(input: int, layers: varargs[tuple[numNeurons: int, activation: 
 
     result.initKaimingNormal()
 
-func `%`*(f: proc (x: Float): Float{.closure, noSideEffect.}): JsonNode =
+func `%`(f: proc (x: Float): Float{.closure, noSideEffect.}): JsonNode =
   newJNull()
   
 func initFromJson(dst: var ActivationFunction; jsonNode: JsonNode; jsonPath: var string) =
@@ -210,16 +262,22 @@ func initFromJson(dst: var ActivationFunction; jsonNode: JsonNode; jsonPath: var
             dst = activationFunctions[name]
 
 func toJsonString*(network: Network): string =
+    ## Returns the JSON represenation of `network`.
+
     {.cast(noSideEffect).}:
         let a = %*(network)
         pretty(a)
 
 func toNetwork*(jsonString: string): Network =
+    ## Creates a `Network` from a JSON formatted string representation.
+
     {.cast(noSideEffect).}:
         let jsonNode = jsonString.parseJson
     result = to(jsonNode, Network)
 
 func `$`*(network: Network): string =
+    ## Returns a string conveying some basic information about the structure  of the network.
+
     if network.layers.len == 0:
         return
     result &= $network.layers[0].numInputs
@@ -320,16 +378,41 @@ func forwardInternal(
         )
 
 func forward*(network: Network, input: openArray[Float], backpropInfo: var BackpropInfo): seq[Float] =
+    ## Runs the network with a given input. Also collects information in `backpropInfo` for a
+    ## `backward <#backward,Network,openArray[Float],BackpropInfo>`_ pass.
+    ## Returns a `seq` with the length according to the size of the output layer of the network.
+    ## 
+    ## Note: When no information for a backward pass is needed,
+    ## use `forward(Network, openArray[Float]) <#forward,Network,openArray[Float]>`_ for better performance.
+
     network.forwardInternal(input, backpropInfo)
 
 func forward*(network: Network, input: openArray[Float]): seq[Float] =
+    ## Runs the network with a given input. Does not collect information for a backward pass.
+    ## Returns a `seq` with the length according to the size of the output layer of the network.
+
     var nothing: Nothing
     network.forwardInternal(input, nothing)
 
 func forward*(network: Network, input: openArray[SparseElement], backpropInfo: var BackpropInfo): seq[Float] =
+    ## Runs the network with a given sparse input. Also collects information in `backpropInfo` for a
+    ## `backward <#backward,Network,openArray[Float],BackpropInfo>`_ pass.
+    ## Returns a `seq` with the length according to the size of the output layer of the network.
+    ## 
+    ## Note: When no information for a backward pass is needed,
+    ## use `forward(Network, openArray[SparseElement]) <#forward,Network,openArray[SparseElement]>`_ for better performance.
+
     network.forwardInternal(input, backpropInfo)
 
 func forward*(network: Network, input: openArray[SparseElement]): seq[Float] =
+    ## Runs the network with a given sparse input. Does not collect information for a backward pass
+    ## Returns a `seq` with the length according to the size of the output layer of the network.
+    ## 
+    ## A sparse input consist of a `seq` which contains tuples of indices and values.
+    ## The indices indicate which input neuron is meant to have the according value.
+    ## Sparse inputs are especially useful if inputs often have many zero elements. Then
+    ## using sparse inputs can improve performance of the first layer significantly.
+
     var nothing: Nothing
     network.forwardInternal(input, nothing)
 
@@ -426,6 +509,8 @@ func backward*(
     lossGradient: openArray[Float],
     backpropInfo: var BackpropInfo
 ) =
+    ## Calculates and adds the gradient of all network parameters in regard to the loss gradient to `backpropInfo`.
+
     doAssert network.layers.len >= 1, "Network needs at least one input layer and one output layer"
     doAssert lossGradient.len == network.layers[^1].numOutputs, "Loss size and output size of last layer must be the same"
     doAssert backpropInfo.layers.len == network.layers.len, "BackpropInfo is not set up correctly for backpropagation"
@@ -458,6 +543,9 @@ func backward*(
 #----------- Utility Functions -----------#
 
 func toSparse*(input: openArray[Float], margin: Float = 0.01): seq[SparseElement] =
+    ## Returns a sparse representation of a given array. Elements that are closer to zero than `margin` will not
+    ## be added to the result.
+
     for i, a in input.pairs:
-        if abs(a) > margin:
+        if abs(a) >= margin:
             result.add((i, a))
