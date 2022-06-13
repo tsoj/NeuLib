@@ -7,3 +7,4 @@ perf.data*
 main-main.asm
 txt.txt
 htmldocs
+mnist_model.json

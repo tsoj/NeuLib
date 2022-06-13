@@ -9,12 +9,14 @@ var model = newNetwork(
     (10, sigmoid)
 )
 
-# var model = readFile("txt.txt").toNetwork
-
+# or load from file
+# var model = readFile("mnist_model.json").toNetwork
 
 echo model
 
-let batchSize = 15
+let
+    batchSize = 15
+    lr = 0.2
 
 let
     trainX = trainImages.toSeqs(Float)
@@ -23,7 +25,7 @@ let
     testY = testLabels.toSeqs(Float)
 
 
-var backpropInfo = model.getBackpropInfo
+var backpropInfo = model.newBackpropInfo
 
 echo "Beginning with training ..."
 
@@ -47,10 +49,11 @@ for epoch in 0..<10:
             else:
                 # try out sparse input layout
                 output = model.forward(trainX[index].toSparse, backpropInfo)
+
             let lossGradient = mseGradient(target = trainY[index], output = output)
 
             model.backward(lossGradient, backpropInfo)
-        model.addGradient(backpropInfo, 0.2)
+        model.addGradient(backpropInfo, lr)
 
     echo "Finished epoch ", epoch, " in ", (now() - start).inMilliseconds, " ms"
 
@@ -63,5 +66,5 @@ for epoch in 0..<10:
             numCorrect += 1
     echo "Neural net decided ", fmt"{100.0*numCorrect.float/testX.len.float:.2f}", " % test cases correctly."
 
-
-#echo model.toJsonString
+# might want to store trained model
+# writeFile("mnist_model.json", model.toJsonString)

@@ -1,4 +1,4 @@
-import streams, endians, unicode, sequtils, os
+import streams, endians, sequtils, os
 
 proc readInt32BE(stream: Stream): int32 {.inline.}=
   var rawBytes = stream.readInt32
@@ -35,14 +35,6 @@ proc loadLabels(filename: string): seq[uint8] =
 
     result = newSeq[uint8](numLabels)
     discard stream.readData(addr result[0], result.len * sizeof result[0])
-
-func imageToRuneBox*(image: Image, label: uint8): seq[seq[Rune]] =
-    result = newSeq[seq[Rune]](29)
-    result[0] = ("Labeled as: " & $label).toRunes
-    for h in 1..28:
-        result[h] = newSeq[Rune](28)
-        for w in 0..<28:
-            result[h][w] = " ░▒▓█".toRunes[image[h][w] div (uint8.high div 4)]
 
 func toSeq*(image: Image, T: typedesc): seq[T] =
     for h in 0..<28:

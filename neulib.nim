@@ -137,7 +137,7 @@ func setZero*(backpropInfo: var BackpropInfo) =
         layerBackpropInfo.inputGradient.setZero
     backpropInfo.numSummedGradients = 0
 
-func getBackpropInfo*(network: Network): BackpropInfo =
+func newBackpropInfo*(network: Network): BackpropInfo =
     ## Creates `BackpropInfo` that can be used to do backwards passes with `network`.
 
     for layer in network.layers:
@@ -223,19 +223,14 @@ func newNetwork*(input: int, layers: varargs[tuple[numNeurons: int, activation: 
     ## Describes a model that looks like this:
     ## 
     ## .. code-block::
+    ##
     ##   ooo ... 784 ... ooo input
     ##    \               /  fully connected
-    ##    oo ... 40 ... oo
-    ##          relu
-    ##    oo ... 40 ... oo
+    ##    oo ... 40 ... oo   ReLU
     ##     |            |    fully connected
-    ##    oo ... 40 ... oo
-    ##          relu
-    ##    oo ... 40 ... oo
+    ##    oo ... 40 ... oo   ReLU
     ##      \          /     fully connected
-    ##       oooooooooo
-    ##        sigmoid
-    ##       oooooooooo      output
+    ##       oooooooooo      sigmoid, output
 
     doAssert layers.len >= 1, "Network needs at least one layer"
 
@@ -280,9 +275,40 @@ func `$`*(network: Network): string =
 
     if network.layers.len == 0:
         return
-    result &= $network.layers[0].numInputs
+    var maxLength = len($network.layers[0].numInputs)
     for layer in network.layers:
-        result &= "\n" & $layer.numOutputs & " " & layer.activation.name
+        maxLength = max(maxLength, len($layer.numOutputs))
+    
+    func getNumberString(num: int): string =
+        result = $num
+        while result.len < maxLength:
+            result = " " & result
+
+    let spacesBeforeWeights = block:
+        var s = ""
+        for i in 0..<(maxLength + "neurons".len) div 2:
+            s &= " "
+        s
+
+    result &= "input:  " & getNumberString(network.layers[0].numInputs) & " neurons\n"
+
+    for i, layer in network.layers.pairs:
+        result &= "        "
+        result &= spacesBeforeWeights & (
+            if layer.numOutputs > layer.numInputs: "/\\\n"
+            elif layer.numOutputs < layer.numInputs: "\\/\n"
+            else: "||\n"
+        )
+        let isLast = i == network.layers.len - 1
+        if isLast:
+            result &= "output: "
+        else:
+            result &= "hidden: "
+
+        result &= getNumberString(layer.numOutputs) & " neurons -> " & layer.activation.name
+        
+        if not isLast:
+            result &= "\n"
 
 func weightIndex(inNeuron, outNeuron, numInputs, numOutputs: int): int =
     outNeuron + numOutputs * inNeuron;
@@ -357,7 +383,7 @@ func forwardInternal(
     )
 
     when backpropInfo isnot Nothing:
-        assert backpropInfo.layers.len == network.layers.len
+        doAssert backpropInfo.layers.len == network.layers.len
         when input is openArray[Float]:
             backpropInfo.input = input.toSeq
             backpropInfo.sparseInput.setLen(0)
