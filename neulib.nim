@@ -360,8 +360,10 @@ func forwardInternal(
         assert backpropInfo.layers.len == network.layers.len
         when input is openArray[Float]:
             backpropInfo.input = input.toSeq
+            backpropInfo.sparseInput.setLen(0)
         else:
             backpropInfo.sparseInput = input.toSeq
+            backpropInfo.input.setLen(0)
 
 
     result = feedForwardLayer(
