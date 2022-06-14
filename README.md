@@ -12,7 +12,11 @@ var model = newNetwork(
 )
 ```
 
-Creates a model with 784 input features, 10 output features which are put through the sigmoid function, and two hidden layers with 40 neurons, which are both ReLU activated.
+Creates a model with 784 input features, 10 sigmoid activated output features, and two hidden layers with 40 neurons, which are both ReLU activated.
+
+The model will be randomly initialized using Kaiming initialization.
+
+NeuLib already provides several common activation functions: `sigmoid`, `softplus`, `silu`, `relu`, `elu`, `leakyRelu`, `identity`, `tanh`. Custom activation functions can be added using `newActivationFunction(f, df, name)`.
 
 ### Execute a model
 
@@ -64,11 +68,12 @@ var newModel = readFile("mnist_model.json").toNetwork
 
 ### Example
 
-See [`train.nim`](./train.nim) for a small demo using the MNIST data set.
+See [`train.nim`](./train.nim) for a small demo using the MNIST data set.  
+Compile it with `nim r train.nim`.
 
 ### Notes for compiling
 
-Use `-d:danger`, `-cc:clang` and `-d:openmp`  flags for optimal performance.
+Use `-d:danger`, `-cc:clang` and `-d:openmp` flags for optimal performance.
 
 
 

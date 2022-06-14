@@ -1,4 +1,4 @@
-import
+import std/[
     math,
     sequtils,
     random,
@@ -6,40 +6,42 @@ import
     json,
     tables,
     locks
+]
 
 type
     Float* = float32
-    ActivationFunction = object
-        f: proc(x: Float): Float {.noSideEffect.}
-        df: proc(x: Float): Float {.noSideEffect.}
-        name: string
-    Layer = object
-        bias: seq[Float]
-        weights: seq[Float]
-        numInputs: int
-        numOutputs: int
-        activation: ActivationFunction
+    ActivationFunction* = object
+        f*: proc(x: Float): Float {.noSideEffect.}
+        df*: proc(x: Float): Float {.noSideEffect.}
+        name*: string
+    Layer* = object
+        bias*: seq[Float]
+        weights*: seq[Float]
+        numInputs*: int
+        numOutputs*: int
+        activation*: ActivationFunction
     Network* = object
         ## A fully connected neural network. Contains structure and parameters.
-        layers: seq[Layer]
-    Nothing = enum a
+        layers*: seq[Layer]
     SparseElement* = tuple[index: int, value: Float]
-    LayerBackpropInfo = object
-        paramGradient: Layer
+    LayerBackpropInfo* = object
+        biasGradient*: seq[Float]
+        weightsGradient*: seq[Float]
         preActivation: seq[Float]
         postActivation: seq[Float]
         inputGradient: seq[Float]
-    BackpropInfo = object
-        layers: seq[LayerBackpropInfo]
+    BackpropInfo* = object
+        layers*: seq[LayerBackpropInfo]
         input: seq[Float]
         sparseInput: seq[SparseElement]
-        numSummedGradients: int
+        numSummedGradients*: int
+    Nothing = enum a
 
 #----------- Activation and Loss Functions -----------#
 
 var
     activationFunctions: Table[string, ActivationFunction]
-    mutexAddActivationFunctions: Lock
+    mutexAccessActivationFunctions: Lock
 
 func newActivationFunction*(
         f: proc(x: Float): Float {.noSideEffect.},
@@ -53,9 +55,21 @@ func newActivationFunction*(
 
     result = ActivationFunction(f: f, df: df, name: name)
     {.cast(noSideEffect).}:
-        withLock mutexAddActivationFunctions:
+        withLock mutexAccessActivationFunctions:
             doAssert not activationFunctions.hasKey(name), "Each activation function needs to have a unique name "
             activationFunctions[name] = result
+
+func getActivationFunction*(name: string): ActivationFunction =
+    ## Return the activation function registered under `name`.
+
+    {.cast(noSideEffect).}:
+        withLock mutexAccessActivationFunctions:
+            doAssert(
+                activationFunctions.hasKey(name),
+                "Activation function '" & name & "' must be created using 'newActivationFunction'"
+            )
+            return activationFunctions[name]
+
 
 let sigmoid* = newActivationFunction(
     f = proc(x: Float): Float = 1.Float / (1.Float + exp(-x)),
@@ -132,8 +146,8 @@ func setZero*(backpropInfo: var BackpropInfo) =
     ## Resets the gradient stored in `backpropInfo` to zero.
 
     for layerBackpropInfo in backpropInfo.layers.mitems:
-        layerBackpropInfo.paramGradient.bias.setZero
-        layerBackpropInfo.paramGradient.weights.setZero
+        layerBackpropInfo.biasGradient.setZero
+        layerBackpropInfo.weightsGradient.setZero
         layerBackpropInfo.inputGradient.setZero
     backpropInfo.numSummedGradients = 0
 
@@ -142,7 +156,8 @@ func newBackpropInfo*(network: Network): BackpropInfo =
 
     for layer in network.layers:
         result.layers.add(LayerBackpropInfo(
-            paramGradient: layer,
+            biasGradient: layer.bias,
+            weightsGradient: layer.weights,
             inputGradient: newSeq[Float](layer.numInputs)
         ))
     result.setZero
@@ -156,16 +171,16 @@ func addGradient*(network: var Network, backpropInfo: BackpropInfo, lr: Float) =
     let lr = -lr # because we want to minimize
 
     for layerIndex in 0..<network.layers.len:
-        assert network.layers[layerIndex].bias.len == backpropInfo.layers[layerIndex].paramGradient.bias.len
-        assert network.layers[layerIndex].weights.len == backpropInfo.layers[layerIndex].paramGradient.weights.len
+        assert network.layers[layerIndex].bias.len == backpropInfo.layers[layerIndex].biasGradient.len
+        assert network.layers[layerIndex].weights.len == backpropInfo.layers[layerIndex].weightsGradient.len
         
         for i in 0..<network.layers[layerIndex].bias.len:
             network.layers[layerIndex].bias[i] +=
-                (lr * backpropInfo.layers[layerIndex].paramGradient.bias[i]) / backpropInfo.numSummedGradients.Float
+                (lr * backpropInfo.layers[layerIndex].biasGradient[i]) / backpropInfo.numSummedGradients.Float
         
         for i in 0..<network.layers[layerIndex].weights.len:
             network.layers[layerIndex].weights[i] +=
-                (lr * backpropInfo.layers[layerIndex].paramGradient.weights[i]) / backpropInfo.numSummedGradients.Float
+                (lr * backpropInfo.layers[layerIndex].weightsGradient[i]) / backpropInfo.numSummedGradients.Float
 
 func newLayer(numInputs, numOutputs: int, activation: ActivationFunction): Layer =
     assert numInputs > 0 and numOutputs > 0
@@ -208,6 +223,7 @@ func newNetwork*(input: int, layers: varargs[tuple[numNeurons: int, activation: 
     ## Creates new instance of `Network`.
     ## `input` is the number of input units.
     ## `layers` describes how many neurons the following layers have and which activation function they use.
+    ## The model will be randomly initialized using Kaiming initialization.
     ## 
     ## Example:
     ##
@@ -223,14 +239,14 @@ func newNetwork*(input: int, layers: varargs[tuple[numNeurons: int, activation: 
     ## Describes a model that looks like this:
     ## 
     ## .. code-block::
-    ##
-    ##   ooo ... 784 ... ooo input
-    ##    \               /  fully connected
-    ##    oo ... 40 ... oo   ReLU
-    ##     |            |    fully connected
-    ##    oo ... 40 ... oo   ReLU
-    ##      \          /     fully connected
-    ##       oooooooooo      sigmoid, output
+    ## 
+    ##   input:  784 neurons
+    ##                \/ 
+    ##   hidden:  40 neurons -> relu
+    ##                ||
+    ##   hidden:  40 neurons -> relu
+    ##                \/
+    ##   output:  10 neurons -> sigmoid
 
     doAssert layers.len >= 1, "Network needs at least one layer"
 
@@ -248,13 +264,7 @@ func `%`(f: proc (x: Float): Float{.closure, noSideEffect.}): JsonNode =
   
 func initFromJson(dst: var ActivationFunction; jsonNode: JsonNode; jsonPath: var string) =
     let name = jsonNode{"name"}.getStr()
-    {.cast(noSideEffect).}:
-        withLock mutexAddActivationFunctions:
-            doAssert(
-                activationFunctions.hasKey(name),
-                "Activation function '" & name & "' must be created using 'newActivationFunction'"
-            )
-            dst = activationFunctions[name]
+    dst = name.getActivationFunction()
 
 func toJsonString*(network: Network): string =
     ## Returns the JSON represenation of `network`.
@@ -458,10 +468,8 @@ func backPropagateLayer(
     layerBackpropInfo: var LayerBackpropInfo,
     calcInGradient: bool = true
 ) =
-    assert layerBackpropInfo.paramGradient.numOutputs == layer.numOutputs
-    assert layerBackpropInfo.paramGradient.bias.len == layer.numOutputs
-    assert layerBackpropInfo.paramGradient.numInputs == layer.numInputs
-    assert layerBackpropInfo.paramGradient.weights.len == layer.numInputs * layer.numOutputs
+    assert layerBackpropInfo.biasGradient.len == layer.numOutputs
+    assert layerBackpropInfo.weightsGradient.len == layer.numInputs * layer.numOutputs
     assert outGradient.len == layer.numOutputs
     assert inPostActivation.len == layer.numInputs
     assert layerBackpropInfo.inputGradient.len == layer.numInputs
@@ -470,16 +478,16 @@ func backPropagateLayer(
         layerBackpropInfo.inputGradient[inNeuron] = 0
 
     for outNeuron in 0..<layer.numOutputs:
-        layerBackpropInfo.paramGradient.bias[outNeuron] =
+        layerBackpropInfo.biasGradient[outNeuron] =
             layer.activation.df(layerBackpropInfo.preActivation[outNeuron]) * outGradient[outNeuron]
 
     # for inNeuron in 0..<layer.numInputs:
     #     for outNeuron in 0..<layer.numOutputs:
     #         let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
-    #         layerBackpropInfo.paramGradient.weights[i] +=
-    #             inPostActivation[inNeuron] * layerBackpropInfo.paramGradient.bias[outNeuron]
+    #         layerBackpropInfo.weightsGradient[i] +=
+    #             inPostActivation[inNeuron] * layerBackpropInfo.biasGradient[outNeuron]
     #         layerBackpropInfo.inputGradient[inNeuron] +=
-    #             layer.weights[i] * layerBackpropInfo.paramGradient.bias[outNeuron]
+    #             layer.weights[i] * layerBackpropInfo.biasGradient[outNeuron]
     # ^this is implemented below using OpenMP to utilize SIMD instructions
     {.emit: ["""
     for(size_t inNeuron = 0; inNeuron < """, layer.numInputs, """; ++inNeuron){
@@ -487,11 +495,11 @@ func backPropagateLayer(
         #pragma omp simd reduction(+ : in_neurons_gradient_in[inNeuron])
         for(size_t outNeuron = 0; outNeuron < """, layer.numOutputs, """; ++outNeuron){
             const size_t i = """, weightIndex, """(inNeuron, outNeuron, """, layer.numInputs, """,""", layer.numOutputs, """);
-            """, layerBackpropInfo.paramGradient.weights, """.p->data[i] +=
-                """, inPostActivation, """[inNeuron] * """, layerBackpropInfo.paramGradient.bias, """.p->data[outNeuron];
+            """, layerBackpropInfo.weightsGradient, """.p->data[i] +=
+                """, inPostActivation, """[inNeuron] * """, layerBackpropInfo.biasGradient, """.p->data[outNeuron];
             if(""",calcInGradient,""")
             in_neurons_gradient_in[inNeuron] +=
-                """, layer.weights, """.p->data[i] * """, layerBackpropInfo.paramGradient.bias, """.p->data[outNeuron];
+                """, layer.weights, """.p->data[i] * """, layerBackpropInfo.biasGradient, """.p->data[outNeuron];
         }
     }    
     """].}
@@ -503,10 +511,8 @@ func backPropagateLayer(
     layerBackpropInfo: var LayerBackpropInfo,
     calcInGradient: bool = true
 ) =
-    assert layerBackpropInfo.paramGradient.numOutputs == layer.numOutputs
-    assert layerBackpropInfo.paramGradient.bias.len == layer.numOutputs
-    assert layerBackpropInfo.paramGradient.numInputs == layer.numInputs
-    assert layerBackpropInfo.paramGradient.weights.len == layer.numInputs * layer.numOutputs
+    assert layerBackpropInfo.biasGradient.len == layer.numOutputs
+    assert layerBackpropInfo.weightsGradient.len == layer.numInputs * layer.numOutputs
     assert outGradient.len == layer.numOutputs
     assert inPostActivation.len == layer.numInputs or inPostActivation is openArray[SparseElement]
     assert layerBackpropInfo.inputGradient.len == layer.numInputs
@@ -515,22 +521,22 @@ func backPropagateLayer(
         layerBackpropInfo.inputGradient[inNeuron] = 0
 
     for outNeuron in 0..<layer.numOutputs:
-        layerBackpropInfo.paramGradient.bias[outNeuron] =
+        layerBackpropInfo.biasGradient[outNeuron] =
             layer.activation.df(layerBackpropInfo.preActivation[outNeuron]) * outGradient[outNeuron]
 
     for (inNeuron, value) in inPostActivation:
         assert inNeuron in 0..<layer.numInputs
         for outNeuron in 0..<layer.numOutputs:
             let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
-            layerBackpropInfo.paramGradient.weights[i] +=
-                value * layerBackpropInfo.paramGradient.bias[outNeuron]
+            layerBackpropInfo.weightsGradient[i] +=
+                value * layerBackpropInfo.biasGradient[outNeuron]
 
     if calcInGradient:
         for inNeuron in 0..<layer.numInputs:
             for outNeuron in 0..<layer.numOutputs:
                 let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
                 layerBackpropInfo.inputGradient[inNeuron] +=
-                    layer.weights[i] * layerBackpropInfo.paramGradient.bias[outNeuron]
+                    layer.weights[i] * layerBackpropInfo.biasGradient[outNeuron]
 
 func backward*(
     network: Network,

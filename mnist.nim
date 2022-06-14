@@ -1,6 +1,6 @@
-import streams, endians, sequtils, os
+import std/[streams, endians, sequtils, os]
 
-proc readInt32BE(stream: Stream): int32 {.inline.}=
+proc readInt32BE(stream: Stream): int32 =
   var rawBytes = stream.readInt32
   bigEndian32(addr result, addr raw_bytes)
 

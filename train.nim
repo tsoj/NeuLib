@@ -1,6 +1,6 @@
 import neulib, mnist
 
-import sequtils, random, times, strformat
+import std/[sequtils, random, times, strformat]
 
 var model = newNetwork(
     28*28,
@@ -23,7 +23,6 @@ let
     testX = testImages.toSeqs(Float)
     trainY = trainLabels.toSeqs(Float)
     testY = testLabels.toSeqs(Float)
-
 
 var backpropInfo = model.newBackpropInfo
 
