@@ -3,7 +3,7 @@
 A Nim library for small, fully connected neural networks with support for sparse inputs.
 
 ### Create a model
-```Nim
+```nim
 var model = newNetwork(
     784,
     (40, relu),
@@ -20,7 +20,7 @@ NeuLib already provides several common activation functions: `sigmoid`, `softplu
 
 ### Execute a model
 
-```Nim
+```nim
 # run the model with a dense input vector
 var input: seq[Float]
 ...
@@ -34,7 +34,7 @@ let output = model.forward(sparseInput)
 
 ### Train a model
 
-```Nim
+```nim
 # first, create a new variable that can
 # hold the necessary training information
 var backpropInfo = model.newBackpropInfo()
@@ -61,7 +61,7 @@ for each epoch:
 
 ### Store and load models
 
-```Nim
+```nim
 writeFile("mnist_model.json", model.toJsonString)
 var newModel = readFile("mnist_model.json").toNetwork
 ```
