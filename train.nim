@@ -3,11 +3,13 @@ import neulib, mnist
 import std/[sequtils, random, times, strformat]
 
 var model = newNetwork(
-    28*28,
+    12345,
+    (28*28, tanh),
     (40, relu),
     (40, relu),
-    (10, sigmoid)
-)
+    (10, sigmoid),
+    (4, tanh)
+).subNetwork(1..^2)
 
 # or load from file
 # var model = readFile("mnist_model.json").toNetwork

@@ -37,11 +37,13 @@ type
         numSummedGradients*: int
     Nothing = enum a
 
-#----------- Activation and Loss Functions -----------#
-
 var
     activationFunctions: Table[string, ActivationFunction]
     mutexAccessActivationFunctions: Lock
+    randState: Rand = initRand(0)
+    mutexAccessRandom: Lock
+
+#----------- Activation and Loss Functions -----------#
 
 func newActivationFunction*(
         f: proc(x: Float): Float {.noSideEffect.},
@@ -162,6 +164,15 @@ func newBackpropInfo*(network: Network): BackpropInfo =
         ))
     result.setZero
 
+func inputGradient*(backpropInfo: BackpropInfo): seq[Float] =
+    ## Returns the input gradient that has been calculated during a backward pass.
+    ## The parameter `calculateInputGradient` must be set to `true` for that,
+    ## when calling `backward <#backward,Network,openArray[Float],BackpropInfo,staticbool>`_.
+
+    doAssert backpropInfo.layers.len >= 1, "BackpropInfo needs at least one input layer and one output layer"
+    doAssert backpropInfo.layers[0].inputGradient.len > 0, "Input gradient needs to be calculated before being used"
+    backpropInfo.layers[0].inputGradient
+
 func addGradient*(network: var Network, backpropInfo: BackpropInfo, lr: Float) =
     ## Applies the gradient accumulated during backwards passes in `backpropInfo` to `network`.
     ## Learning rate can be specified with `lr`.
@@ -196,14 +207,16 @@ func newLayer(numInputs, numOutputs: int, activation: ActivationFunction): Layer
 proc generateGaussianNoise(mu: Float = 0.Float, sigma: Float = 1.Float): Float =
     # Generates values from a normal distribution.
     # Translated from https://en.wikipedia.org/wiki/Box%E2%80%93Muller_transform#Implementation.
-    var u1: Float
-    var u2: Float
-    while true:
-        u1 = rand(1.Float)
-        u2 = rand(1.Float)
-        if u1 > epsilon(Float): break
-    let mag: Float = sigma * sqrt(-2 * ln(u1))
-    mag * cos(2 * PI * u2) + mu
+
+    withLock mutexAccessRandom:
+        var u1: Float
+        var u2: Float
+        while true:
+            u1 = randState.rand(1.Float)
+            u2 = randState.rand(1.Float)
+            if u1 > epsilon(Float): break
+        let mag: Float = sigma * sqrt(-2 * ln(u1))
+        result = mag * cos(2 * PI * u2) + mu
 
 func initKaimingNormal*(network: var Network) =
     ## Randomly initializes the parameters of `network` using a method described in
@@ -258,6 +271,11 @@ func newNetwork*(input: int, layers: varargs[tuple[numNeurons: int, activation: 
         ))
 
     result.initKaimingNormal()
+
+template subNetwork*(network: Network, slice: untyped): Network =
+    ## Creates new instance of `Network` from specified layers of an exising network.
+
+    Network(layers: network.layers[slice])
 
 func `%`(f: proc (x: Float): Float{.closure, noSideEffect.}): JsonNode =
   newJNull()
@@ -383,9 +401,10 @@ func forwardInternal(
     backpropInfo: var (BackpropInfo or Nothing)
 ): seq[Float] =
 
+    doAssert network.layers.len >= 1, "Network needs at least one input layer and one output layer"
+
     result = newSeq[Float](network.layers[^1].numOutputs)
 
-    doAssert network.layers.len >= 1, "Network needs at least one input layer and one output layer"
     doAssert result.len == network.layers[^1].numOutputs, "Output size and output size of last layer must be the same"
     doAssert(
         input.len == network.layers[0].numInputs or input isnot openArray[Float],
@@ -417,7 +436,7 @@ func forwardInternal(
 
 func forward*(network: Network, input: openArray[Float], backpropInfo: var BackpropInfo): seq[Float] =
     ## Runs the network with a given input. Also collects information in `backpropInfo` for a
-    ## `backward <#backward,Network,openArray[Float],BackpropInfo>`_ pass.
+    ## `backward <#backward,Network,openArray[Float],BackpropInfo,staticbool>`_ pass.
     ## Returns a `seq` with the length according to the size of the output layer of the network.
     ## 
     ## Note: When no information for a backward pass is needed,
@@ -434,7 +453,7 @@ func forward*(network: Network, input: openArray[Float]): seq[Float] =
 
 func forward*(network: Network, input: openArray[SparseElement], backpropInfo: var BackpropInfo): seq[Float] =
     ## Runs the network with a given sparse input. Also collects information in `backpropInfo` for a
-    ## `backward <#backward,Network,openArray[Float],BackpropInfo>`_ pass.
+    ## `backward <#backward,Network,openArray[Float],BackpropInfo,staticbool>`_ pass.
     ## Returns a `seq` with the length according to the size of the output layer of the network.
     ## 
     ## Note: When no information for a backward pass is needed,
@@ -466,7 +485,7 @@ func backPropagateLayer(
     outGradient: openArray[Float],
     inPostActivation: openArray[Float],
     layerBackpropInfo: var LayerBackpropInfo,
-    calcInGradient: bool = true
+    calculateInputGradient: bool = true
 ) =
     assert layerBackpropInfo.biasGradient.len == layer.numOutputs
     assert layerBackpropInfo.weightsGradient.len == layer.numInputs * layer.numOutputs
@@ -486,8 +505,9 @@ func backPropagateLayer(
     #         let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
     #         layerBackpropInfo.weightsGradient[i] +=
     #             inPostActivation[inNeuron] * layerBackpropInfo.biasGradient[outNeuron]
-    #         layerBackpropInfo.inputGradient[inNeuron] +=
-    #             layer.weights[i] * layerBackpropInfo.biasGradient[outNeuron]
+    #         if calculateInputGradient:
+    #             layerBackpropInfo.inputGradient[inNeuron] +=
+    #                 layer.weights[i] * layerBackpropInfo.biasGradient[outNeuron]
     # ^this is implemented below using OpenMP to utilize SIMD instructions
     {.emit: ["""
     for(size_t inNeuron = 0; inNeuron < """, layer.numInputs, """; ++inNeuron){
@@ -497,19 +517,19 @@ func backPropagateLayer(
             const size_t i = """, weightIndex, """(inNeuron, outNeuron, """, layer.numInputs, """,""", layer.numOutputs, """);
             """, layerBackpropInfo.weightsGradient, """.p->data[i] +=
                 """, inPostActivation, """[inNeuron] * """, layerBackpropInfo.biasGradient, """.p->data[outNeuron];
-            if(""",calcInGradient,""")
+            if(""",calculateInputGradient,""")
             in_neurons_gradient_in[inNeuron] +=
                 """, layer.weights, """.p->data[i] * """, layerBackpropInfo.biasGradient, """.p->data[outNeuron];
         }
     }    
-    """].}
+    """].}#"""
 
 func backPropagateLayer(
     layer: Layer,
     outGradient: openArray[Float],
     inPostActivation: openArray[SparseElement],
     layerBackpropInfo: var LayerBackpropInfo,
-    calcInGradient: bool = true
+    calculateInputGradient: static bool = true
 ) =
     assert layerBackpropInfo.biasGradient.len == layer.numOutputs
     assert layerBackpropInfo.weightsGradient.len == layer.numInputs * layer.numOutputs
@@ -531,7 +551,7 @@ func backPropagateLayer(
             layerBackpropInfo.weightsGradient[i] +=
                 value * layerBackpropInfo.biasGradient[outNeuron]
 
-    if calcInGradient:
+    if calculateInputGradient:
         for inNeuron in 0..<layer.numInputs:
             for outNeuron in 0..<layer.numOutputs:
                 let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
@@ -541,9 +561,11 @@ func backPropagateLayer(
 func backward*(
     network: Network,
     lossGradient: openArray[Float],
-    backpropInfo: var BackpropInfo
+    backpropInfo: var BackpropInfo,
+    calculateInputGradient: static bool = false
 ) =
     ## Calculates and adds the gradient of all network parameters in regard to the loss gradient to `backpropInfo`.
+    ## When `calculateInputGradient` is set to false, the gradient for the input will not be calculated.
 
     doAssert network.layers.len >= 1, "Network needs at least one input layer and one output layer"
     doAssert lossGradient.len == network.layers[^1].numOutputs, "Loss size and output size of last layer must be the same"
@@ -563,7 +585,7 @@ func backward*(
             outGradient = if backpropInfo.layers.len <= 1: lossGradient else: backpropInfo.layers[1].inputGradient,
             inPostActivation = input,
             layerBackpropInfo = backpropInfo.layers[0],
-            calcInGradient = false
+            calculateInputGradient = calculateInputGradient
         )
 
     if backpropInfo.input.len > 0:
