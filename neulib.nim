@@ -123,11 +123,12 @@ let tanh* = newActivationFunction(
     name = "tanh"
 )
 
-func mseGradient*(
-    target: openArray[Float],
-    output: openArray[Float]
+func customLossGradient*[T](
+    target: openArray[T],
+    output: openArray[Float],
+    calculateElementLossGradient: proc(t: T, o: Float): Float
 ): seq[Float] =
-    ## Returns the gradient of the mean squared error loss function.
+    ## Returns a custom loss gradient.
     ## `target` is the desired output vector, `output` is the actual output.
 
     result = newSeq[Float](target.len)
@@ -136,7 +137,40 @@ func mseGradient*(
     assert output.len == result.len
 
     for i in 0..<target.len:
-        result[i] = 2.Float * (output[i] - target[i])
+        result[i] = calculateElementLossGradient(target[i], output[i])
+
+func customLoss*[T](
+    target: openArray[T],
+    output: openArray[Float],
+    calculateElementLoss: proc(t: T, o: Float): Float
+): Float =
+    ## Returns a custom loss value.
+    ## `target` is the desired output vector, `output` is the actual output.
+
+    assert target.len == output.len, "target.len: " & $target.len & ", output.len: " & $output.len
+
+    for i in 0..<target.len:
+        result += calculateElementLoss(target[i], output[i])
+    result /= target.len.Float
+
+func mseGradient*(
+    target: openArray[Float],
+    output: openArray[Float]
+): seq[Float] =
+    ## Returns the gradient of the mean squared error loss function.
+    ## `target` is the desired output vector, `output` is the actual output.
+ 
+    customLossGradient(target, output, proc(t, o: Float): Float = 2.Float * (o - t))
+
+func mseLoss*(
+    target: openArray[Float],
+    output: openArray[Float]
+): Float =
+    ## Returns the gradient of the mean squared error loss function.
+    ## `target` is the desired output vector, `output` is the actual output.
+ 
+    customLoss(target, output, proc(t, o: Float): Float = (o - t)*(o - t))
+
 
 #----------- Network and Gradient Stuff  -----------#
 
