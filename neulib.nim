@@ -639,3 +639,64 @@ func toSparse*(input: openArray[Float], margin: Float = 0.01): seq[SparseElement
     for i, a in input.pairs:
         if abs(a) >= margin:
             result.add((i, a))
+
+
+func apply*(x: var openArray[Float], y: openArray[Float], op: proc(x: var Float, y: Float)) =
+    doAssert x.len == y.len
+    for i in 0..<x.len:
+        op(x[i], y[i])
+
+func `+=`*(x: var openArray[Float], y: openArray[Float]) =
+    apply(x,y, proc(x: var Float, y: Float) = x += y)
+func `-=`*(x: var openArray[Float], y: openArray[Float]) =
+    apply(x,y, proc(x: var Float, y: Float) = x -= y)
+func `*=`*(x: var openArray[Float], y: openArray[Float]) =
+    apply(x,y, proc(x: var Float, y: Float) = x *= y)
+func `/=`*(x: var openArray[Float], y: openArray[Float]) =
+    apply(x,y, proc(x: var Float, y: Float) = x /= y)
+
+func `+=`*(x: var openArray[Float], y: Float) =
+    apply(x, proc(x: Float): Float = x + y)
+func `-=`*(x: var openArray[Float], y: Float) =
+    apply(x, proc(x: Float): Float = x - y)
+func `*=`*(x: var openArray[Float], y: Float) =
+    apply(x, proc(x: Float): Float = x * y)
+func `/=`*(x: var openArray[Float], y: Float) =
+    apply(x, proc(x: Float): Float = x / y)
+
+func `+`*(x, y: openArray[Float]): seq[Float] =
+    result &= x
+    result += y
+func `-`*(x, y: openArray[Float]): seq[Float] =
+    result &= x
+    result -= y
+func `*`*(x, y: openArray[Float]): seq[Float] =
+    result &= x
+    result *= y
+func `/`*(x, y: openArray[Float]): seq[Float] =
+    result &= x
+    result /= y
+
+func `+`*(x: openArray[Float], y: Float): seq[Float] =
+    result &= x
+    result += y
+func `-`*(x: openArray[Float], y: Float): seq[Float] =
+    result &= x
+    result -= y
+func `+`*(x: Float, y: openArray[Float]): seq[Float] =
+    y + x
+func `-`*(x: Float, y: openArray[Float]): seq[Float] =
+    result &= y
+    apply(result, proc(a: Float): Float = x - a)
+
+func `*`*(x: openArray[Float], y: Float): seq[Float] =
+    result &= x
+    result *= y
+func `/`*(x: openArray[Float], y: Float): seq[Float] =
+    result &= x
+    result /= y
+func `*`*(x: Float, y: openArray[Float]): seq[Float] =
+    y * x
+func `/`*(x: Float, y: openArray[Float]): seq[Float] =
+    result &= y
+    apply(result, proc(a: Float): Float = x/a)
