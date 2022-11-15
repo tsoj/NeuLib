@@ -5,7 +5,8 @@ import std/[
     fenv,
     json,
     tables,
-    locks
+    locks,
+    strformat
 ]
 
 type
@@ -35,13 +36,85 @@ type
         input: seq[Float]
         sparseInput: seq[SparseElement]
         numSummedGradients*: int
+    Moments* = object
+        lr: Float
+        beta: Float
+        values: seq[Layer]
     Nothing = enum a
 
 var
     activationFunctions: Table[string, ActivationFunction]
     mutexAccessActivationFunctions: Lock
-    randState: Rand = initRand(0)
-    mutexAccessRandom: Lock
+
+#----------- Utility Functions -----------#
+
+func toSparse*(input: openArray[Float], margin: Float = 0.01): seq[SparseElement] =
+    ## Returns a sparse representation of a given array. Elements that are closer to zero than `margin` will not
+    ## be added to the result.
+
+    for i, a in input.pairs:
+        if abs(a) >= margin:
+            result.add((i, a))
+
+func apply*(x: var openArray[Float], y: openArray[Float], op: proc(x: var Float, y: Float) {.noSideEffect.}) =
+    doAssert x.len == y.len
+    for i in 0..<x.len:
+        op(x[i], y[i])
+
+func `+=`*(x: var openArray[Float], y: openArray[Float]) =
+    apply(x,y, proc(x: var Float, y: Float) = x += y)
+func `-=`*(x: var openArray[Float], y: openArray[Float]) =
+    apply(x,y, proc(x: var Float, y: Float) = x -= y)
+func `*=`*(x: var openArray[Float], y: openArray[Float]) =
+    apply(x,y, proc(x: var Float, y: Float) = x *= y)
+func `/=`*(x: var openArray[Float], y: openArray[Float]) =
+    apply(x,y, proc(x: var Float, y: Float) = x /= y)
+
+func `+=`*(x: var openArray[Float], y: Float) =
+    apply(x, proc(x: Float): Float = x + y)
+func `-=`*(x: var openArray[Float], y: Float) =
+    apply(x, proc(x: Float): Float = x - y)
+func `*=`*(x: var openArray[Float], y: Float) =
+    apply(x, proc(x: Float): Float = x * y)
+func `/=`*(x: var openArray[Float], y: Float) =
+    apply(x, proc(x: Float): Float = x / y)
+
+func `+`*(x, y: openArray[Float]): seq[Float] =
+    result &= x
+    result += y
+func `-`*(x, y: openArray[Float]): seq[Float] =
+    result &= x
+    result -= y
+func `*`*(x, y: openArray[Float]): seq[Float] =
+    result &= x
+    result *= y
+func `/`*(x, y: openArray[Float]): seq[Float] =
+    result &= x
+    result /= y
+
+func `+`*(x: openArray[Float], y: Float): seq[Float] =
+    result &= x
+    result += y
+func `-`*(x: openArray[Float], y: Float): seq[Float] =
+    result &= x
+    result -= y
+func `+`*(x: Float, y: openArray[Float]): seq[Float] =
+    y + x
+func `-`*(x: Float, y: openArray[Float]): seq[Float] =
+    result &= y
+    apply(result, proc(a: Float): Float = x - a)
+
+func `*`*(x: openArray[Float], y: Float): seq[Float] =
+    result &= x
+    result *= y
+func `/`*(x: openArray[Float], y: Float): seq[Float] =
+    result &= x
+    result /= y
+func `*`*(x: Float, y: openArray[Float]): seq[Float] =
+    y * x
+func `/`*(x: Float, y: openArray[Float]): seq[Float] =
+    result &= y
+    apply(result, proc(a: Float): Float = x/a)
 
 #----------- Activation and Loss Functions -----------#
 
@@ -126,7 +199,7 @@ let tanh* = newActivationFunction(
 func customLossGradient*[T](
     target: openArray[T],
     output: openArray[Float],
-    calculateElementLossGradient: proc(t: T, o: Float): Float
+    calculateElementLossGradient: proc(t: T, o: Float): Float {.noSideEffect.}
 ): seq[Float] =
     ## Returns a custom loss gradient.
     ## `target` is the desired output vector, `output` is the actual output.
@@ -142,7 +215,7 @@ func customLossGradient*[T](
 func customLoss*[T](
     target: openArray[T],
     output: openArray[Float],
-    calculateElementLoss: proc(t: T, o: Float): Float
+    calculateElementLoss: proc(t: T, o: Float): Float {.noSideEffect.}
 ): Float =
     ## Returns a custom loss value.
     ## `target` is the desired output vector, `output` is the actual output.
@@ -198,6 +271,17 @@ func newBackpropInfo*(network: Network): BackpropInfo =
         ))
     result.setZero
 
+func newMoments*(network: Network, lr = 0.1, beta = 0.9): Moments =
+    ## Creates `Moments` that can be used for using a gradient to optimize `network`
+
+    for layer in network.layers:
+        result.values.add layer
+        result.values[^1].bias.setZero
+        result.values[^1].weights.setZero
+
+    result.beta = beta
+    result.lr = lr
+
 func inputGradient*(backpropInfo: BackpropInfo): seq[Float] =
     ## Returns the input gradient that has been calculated during a backward pass.
     ## The parameter `calculateInputGradient` must be set to `true` for that,
@@ -213,19 +297,39 @@ func addGradient*(network: var Network, backpropInfo: BackpropInfo, lr: Float) =
 
     assert network.layers.len == backpropInfo.layers.len
 
-    let lr = -lr # because we want to minimize
-
     for layerIndex in 0..<network.layers.len:
         assert network.layers[layerIndex].bias.len == backpropInfo.layers[layerIndex].biasGradient.len
         assert network.layers[layerIndex].weights.len == backpropInfo.layers[layerIndex].weightsGradient.len
         
-        for i in 0..<network.layers[layerIndex].bias.len:
-            network.layers[layerIndex].bias[i] +=
-                (lr * backpropInfo.layers[layerIndex].biasGradient[i]) / backpropInfo.numSummedGradients.Float
-        
-        for i in 0..<network.layers[layerIndex].weights.len:
-            network.layers[layerIndex].weights[i] +=
-                (lr * backpropInfo.layers[layerIndex].weightsGradient[i]) / backpropInfo.numSummedGradients.Float
+        network.layers[layerIndex].bias -= (lr / backpropInfo.numSummedGradients.Float) * backpropInfo.layers[layerIndex].biasGradient
+
+        network.layers[layerIndex].weights -= (lr / backpropInfo.numSummedGradients.Float) * backpropInfo.layers[layerIndex].weightsGradient
+
+func addGradient*(network: var Network, backpropInfo: BackpropInfo, moments: var Moments) =
+    ## Applies the gradient accumulated during backwards passes in `backpropInfo` to `network`.
+    ## Uses moments.
+
+    assert network.layers.len == backpropInfo.layers.len
+    assert network.layers.len == moments.values.len
+    
+    for layerIndex in 0..<network.layers.len:
+        assert network.layers[layerIndex].bias.len == backpropInfo.layers[layerIndex].biasGradient.len
+        assert network.layers[layerIndex].weights.len == backpropInfo.layers[layerIndex].weightsGradient.len
+
+        assert network.layers[layerIndex].bias.len == moments.values[layerIndex].bias.len
+        assert network.layers[layerIndex].weights.len == moments.values[layerIndex].weights.len
+
+        moments.values[layerIndex].bias *= moments.beta
+        moments.values[layerIndex].bias += 
+            ((1 - moments.beta) / backpropInfo.numSummedGradients.Float) *
+            backpropInfo.layers[layerIndex].biasGradient
+        network.layers[layerIndex].bias -= moments.lr * moments.values[layerIndex].bias
+
+        moments.values[layerIndex].weights *= moments.beta
+        moments.values[layerIndex].weights += 
+            ((1 - moments.beta) / backpropInfo.numSummedGradients.Float) *
+            backpropInfo.layers[layerIndex].weightsGradient
+        network.layers[layerIndex].weights -= moments.lr * moments.values[layerIndex].weights
 
 func newLayer(numInputs, numOutputs: int, activation: ActivationFunction): Layer =
     assert numInputs > 0 and numOutputs > 0
@@ -238,21 +342,20 @@ func newLayer(numInputs, numOutputs: int, activation: ActivationFunction): Layer
         activation: activation
     )
 
-proc generateGaussianNoise(mu: Float = 0.Float, sigma: Float = 1.Float): Float =
+func generateGaussianNoise(mu: Float = 0.Float, sigma: Float = 1.Float, randState: var Rand): Float =
     # Generates values from a normal distribution.
     # Translated from https://en.wikipedia.org/wiki/Box%E2%80%93Muller_transform#Implementation.
 
-    withLock mutexAccessRandom:
-        var u1: Float
-        var u2: Float
-        while true:
-            u1 = randState.rand(1.Float)
-            u2 = randState.rand(1.Float)
-            if u1 > epsilon(Float): break
-        let mag: Float = sigma * sqrt(-2 * ln(u1))
-        result = mag * cos(2 * PI * u2) + mu
+    var u1: Float
+    var u2: Float
+    while true:
+        u1 = randState.rand(1.Float)
+        u2 = randState.rand(1.Float)
+        if u1 > epsilon(Float): break
+    let mag: Float = sigma * sqrt(-2 * ln(u1))
+    result = mag * cos(2 * PI * u2) + mu
 
-func initKaimingNormal*(network: var Network) =
+func initKaimingNormal*(network: var Network, randState: var Rand) =
     ## Randomly initializes the parameters of `network` using a method described in
     ## `"Delving Deep into Rectifiers: Surpassing Human-Level Performance on ImageNet Classification"
     ## <https://arxiv.org/abs/1502.01852>`_.
@@ -263,10 +366,20 @@ func initKaimingNormal*(network: var Network) =
         let std = sqrt(2.Float / layer.numInputs.Float)
 
         for v in layer.weights.mitems:
-            {.cast(noSideEffect).}:
-                v = generateGaussianNoise(mu = 0.Float, sigma = std)
+            v = generateGaussianNoise(mu = 0.Float, sigma = std, randState)
 
-func newNetwork*(input: int, layers: varargs[tuple[numNeurons: int, activation: ActivationFunction]]): Network =
+func initKaimingNormal*(network: var Network, seed: int64 = 0) =
+    ## Randomly initializes the parameters of `network` using a method described in
+    ## `"Delving Deep into Rectifiers: Surpassing Human-Level Performance on ImageNet Classification"
+    ## <https://arxiv.org/abs/1502.01852>`_.
+
+    var randState: Rand = initRand(seed)
+    network.initKaimingNormal(randState)
+
+func newNetwork*(
+    input: int,
+    layers: varargs[tuple[numNeurons: int, activation: ActivationFunction]]
+): Network =
     ## Creates new instance of `Network`.
     ## `input` is the number of input units.
     ## `layers` describes how many neurons the following layers have and which activation function they use.
@@ -304,7 +417,7 @@ func newNetwork*(input: int, layers: varargs[tuple[numNeurons: int, activation: 
             activation = layers[i].activation
         ))
 
-    result.initKaimingNormal()
+    result.initKaimingNormal(seed = 0)
 
 template subNetwork*(network: Network, slice: untyped): Network =
     ## Creates new instance of `Network` from specified layers of an exising network.
@@ -372,7 +485,7 @@ func `$`*(network: Network): string =
         if not isLast:
             result &= "\n"
 
-func weightIndex(inNeuron, outNeuron, numInputs, numOutputs: int): int =
+func weightIndex*(inNeuron, outNeuron, numInputs, numOutputs: int): int =
     outNeuron + numOutputs * inNeuron;
 
 #----------- Feed Forward Functions -----------#
@@ -442,7 +555,7 @@ func forwardInternal(
     doAssert result.len == network.layers[^1].numOutputs, "Output size and output size of last layer must be the same"
     doAssert(
         input.len == network.layers[0].numInputs or input isnot openArray[Float],
-        "Input size and input size of first layer must be the same"
+        fmt"Input size ({input.len}) and input size of first layer ({network.layers[0].numInputs}) must be the same"
     )
 
     when backpropInfo isnot Nothing:
@@ -629,74 +742,3 @@ func backward*(
         propagateLast(backpropInfo.sparseInput)
 
     backpropInfo.numSummedGradients += 1
-
-#----------- Utility Functions -----------#
-
-func toSparse*(input: openArray[Float], margin: Float = 0.01): seq[SparseElement] =
-    ## Returns a sparse representation of a given array. Elements that are closer to zero than `margin` will not
-    ## be added to the result.
-
-    for i, a in input.pairs:
-        if abs(a) >= margin:
-            result.add((i, a))
-
-
-func apply*(x: var openArray[Float], y: openArray[Float], op: proc(x: var Float, y: Float)) =
-    doAssert x.len == y.len
-    for i in 0..<x.len:
-        op(x[i], y[i])
-
-func `+=`*(x: var openArray[Float], y: openArray[Float]) =
-    apply(x,y, proc(x: var Float, y: Float) = x += y)
-func `-=`*(x: var openArray[Float], y: openArray[Float]) =
-    apply(x,y, proc(x: var Float, y: Float) = x -= y)
-func `*=`*(x: var openArray[Float], y: openArray[Float]) =
-    apply(x,y, proc(x: var Float, y: Float) = x *= y)
-func `/=`*(x: var openArray[Float], y: openArray[Float]) =
-    apply(x,y, proc(x: var Float, y: Float) = x /= y)
-
-func `+=`*(x: var openArray[Float], y: Float) =
-    apply(x, proc(x: Float): Float = x + y)
-func `-=`*(x: var openArray[Float], y: Float) =
-    apply(x, proc(x: Float): Float = x - y)
-func `*=`*(x: var openArray[Float], y: Float) =
-    apply(x, proc(x: Float): Float = x * y)
-func `/=`*(x: var openArray[Float], y: Float) =
-    apply(x, proc(x: Float): Float = x / y)
-
-func `+`*(x, y: openArray[Float]): seq[Float] =
-    result &= x
-    result += y
-func `-`*(x, y: openArray[Float]): seq[Float] =
-    result &= x
-    result -= y
-func `*`*(x, y: openArray[Float]): seq[Float] =
-    result &= x
-    result *= y
-func `/`*(x, y: openArray[Float]): seq[Float] =
-    result &= x
-    result /= y
-
-func `+`*(x: openArray[Float], y: Float): seq[Float] =
-    result &= x
-    result += y
-func `-`*(x: openArray[Float], y: Float): seq[Float] =
-    result &= x
-    result -= y
-func `+`*(x: Float, y: openArray[Float]): seq[Float] =
-    y + x
-func `-`*(x: Float, y: openArray[Float]): seq[Float] =
-    result &= y
-    apply(result, proc(a: Float): Float = x - a)
-
-func `*`*(x: openArray[Float], y: Float): seq[Float] =
-    result &= x
-    result *= y
-func `/`*(x: openArray[Float], y: Float): seq[Float] =
-    result &= x
-    result /= y
-func `*`*(x: Float, y: openArray[Float]): seq[Float] =
-    y * x
-func `/`*(x: Float, y: openArray[Float]): seq[Float] =
-    result &= y
-    apply(result, proc(a: Float): Float = x/a)

@@ -26,7 +26,11 @@ let
     trainY = trainLabels.toSeqs(Float)
     testY = testLabels.toSeqs(Float)
 
-var backpropInfo = model.newBackpropInfo
+const useMoments = false
+
+var
+    backpropInfo = model.newBackpropInfo
+    moments = model.newMoments(lr = lr, beta = 0.9)
 
 echo "Beginning with training ..."
 
@@ -55,7 +59,11 @@ for epoch in 0..<10:
             let lossGradient = mseGradient(target = trainY[index], output = output)
 
             model.backward(lossGradient, backpropInfo)
-        model.addGradient(backpropInfo, lr)
+        
+        if useMoments:
+            model.addGradient(backpropInfo, moments)
+        else:
+            model.addGradient(backpropInfo, lr)
 
     echo(
         "Finished epoch ", epoch, " in ", (now() - start).inMilliseconds, " ms (used ",
