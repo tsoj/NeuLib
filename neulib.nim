@@ -2,7 +2,6 @@ import std/[
     math,
     sequtils,
     random,
-    fenv,
     json,
     tables,
     locks,
@@ -342,19 +341,6 @@ func newLayer(numInputs, numOutputs: int, activation: ActivationFunction): Layer
         activation: activation
     )
 
-func generateGaussianNoise(mu: Float = 0.Float, sigma: Float = 1.Float, randState: var Rand): Float =
-    # Generates values from a normal distribution.
-    # Translated from https://en.wikipedia.org/wiki/Box%E2%80%93Muller_transform#Implementation.
-
-    var u1: Float
-    var u2: Float
-    while true:
-        u1 = randState.rand(1.Float)
-        u2 = randState.rand(1.Float)
-        if u1 > epsilon(Float): break
-    let mag: Float = sigma * sqrt(-2 * ln(u1))
-    result = mag * cos(2 * PI * u2) + mu
-
 func initKaimingNormal*(network: var Network, randState: var Rand) =
     ## Randomly initializes the parameters of `network` using a method described in
     ## `"Delving Deep into Rectifiers: Surpassing Human-Level Performance on ImageNet Classification"
@@ -366,7 +352,7 @@ func initKaimingNormal*(network: var Network, randState: var Rand) =
         let std = sqrt(2.Float / layer.numInputs.Float)
 
         for v in layer.weights.mitems:
-            v = generateGaussianNoise(mu = 0.Float, sigma = std, randState)
+            v = randState.gauss(mu = 0.0, sigma = std)
 
 func initKaimingNormal*(network: var Network, seed: int64 = 0) =
     ## Randomly initializes the parameters of `network` using a method described in
