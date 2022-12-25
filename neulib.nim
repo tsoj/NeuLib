@@ -622,11 +622,6 @@ func forward*(network: Network, input: openArray[SparseElement]): seq[Float] =
 
 #----------- Back Propagate Functions -----------#
 
-when defined(openmp):
-  {.passC: "-fopenmp".}
-  {.passL: "-fopenmp".}
-  {.pragma: omp, header:"omp.h".}
-
 func backPropagateLayer(
     layer: Layer,
     outGradient: openArray[Float],
