@@ -2,6 +2,12 @@
 
 A Nim library for small, fully connected neural networks with support for sparse inputs.
 
+### Prerequisites
+
+- You need to install [NimBLAS](https://github.com/SciNim/nimblas) (e.g. using Nimble: `nimble install nimblas`)
+- Install a [BLAS](https://de.wikipedia.org/wiki/Basic_Linear_Algebra_Subprograms) library such as OpenBLAS (I suggest not using a multihread BLAS implementation)
+- When compiling your nim program, you may need to specify the BLAS library you want to use by adding `-d:blas=your_BLAS_library`. When, for example, you want to link `libopenblas.so.3` on Linux, you should pass to Nim the option `-d:blas=openblas`
+
 ### Create a model
 ```nim
 var model = newNetwork(
@@ -73,7 +79,7 @@ Compile it with `nim r train.nim`.
 
 ### Notes for compiling
 
-Use `-d:danger`, `-cc:clang` and `-d:openmp` flags for optimal performance.
+Use `-d:danger` and `-cc:clang` flags for optimal performance.
 
 
 

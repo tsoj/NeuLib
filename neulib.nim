@@ -489,16 +489,10 @@ func feedForwardLayer(
     assert layer.weights.len == layer.numInputs * layer.numOutputs
 
     result = layer.bias
-    
-    # input * weightMatrix = result ()
-    # for inNeuron in 0..<layer.numInputs:
-    #     for outNeuron in 0..<layer.numOutputs:
-    #         let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
-    #         result[outNeuron] += layer.weights[i] * input[inNeuron]
 
     # matrix-vector-multiplication
     # Y = alpha*A*X + beta*Y
-    gemv(
+    nimblas.gemv(
         order = colMajor,
         TransA = noTranspose,
         M = layer.numOutputs,
@@ -508,7 +502,7 @@ func feedForwardLayer(
         lda = layer.numOutputs,
         X = addr input[0],
         incX = 1,
-        beta = 0.Float, #
+        beta = 0.Float,
         Y = addr result[0],
         incY = 1
     )
@@ -653,17 +647,9 @@ func backPropagateLayer(
         layerBackpropInfo.biasGradient[outNeuron] =
             layer.activation.df(layerBackpropInfo.preActivation[outNeuron]) * outGradient[outNeuron]
 
-
-    # inPostActivation * biasGradient = weightsGradient (outer product)
-    # for inNeuron in 0..<layer.numInputs:
-    #     for outNeuron in 0..<layer.numOutputs:
-    #         let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
-    #         layerBackpropInfo.weightsGradient[i] +=
-    #             inPostActivation[inNeuron] * layerBackpropInfo.biasGradient[outNeuron]
-
     # outer product (vector-vector multiplication)
     # A = alpha*X*Y + A
-    ger(
+    nimblas.ger(
         order = rowMajor,
         M = layer.numInputs,
         N = layer.numOutputs,
@@ -675,7 +661,6 @@ func backPropagateLayer(
         A = addr layerBackpropInfo.weightsGradient[0],
         lda = layer.numOutputs
     )
-
     
     if calculateInputGradient:
         for inNeuron in 0..<layer.numInputs:

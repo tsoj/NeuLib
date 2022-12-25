@@ -4,8 +4,8 @@ import std/[sequtils, random, times, strformat]
 
 var model = newNetwork(
     28*28,
-    (40, relu),
-    (40, relu),
+    (64, relu),
+    (32, relu),
     (10, sigmoid)
 )
 
