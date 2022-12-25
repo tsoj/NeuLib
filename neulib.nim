@@ -502,7 +502,7 @@ func feedForwardLayer(
         lda = layer.numOutputs,
         X = addr input[0],
         incX = 1,
-        beta = 0.Float,
+        beta = 1.Float,
         Y = addr result[0],
         incY = 1
     )
@@ -658,11 +658,22 @@ func backPropagateLayer(
     )
     
     if calculateInputGradient:
-        for inNeuron in 0..<layer.numInputs:
-            for outNeuron in 0..<layer.numOutputs:
-                let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
-                layerBackpropInfo.inputGradient[inNeuron] +=
-                    layer.weights[i] * layerBackpropInfo.biasGradient[outNeuron]
+        
+        # Y = alpha*A*X + beta*Y
+        nimblas.gemv(
+            order = colMajor,
+            TransA = transpose,
+            M = layer.numOutputs,
+            N = layer.numInputs,
+            alpha = 1.Float,
+            A = addr layer.weights[0],
+            lda = layer.numOutputs,
+            X = addr layerBackpropInfo.biasGradient[0],
+            incX = 1,
+            beta = 1.Float,
+            Y = addr layerBackpropInfo.inputGradient[0],
+            incY = 1
+        )
 
 func backPropagateLayer(
     layer: Layer,
