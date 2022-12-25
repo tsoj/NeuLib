@@ -8,6 +8,8 @@ import std/[
     strformat
 ]
 
+import nimblas
+
 type
     Float* = float32
     ActivationFunction* = object
@@ -413,7 +415,7 @@ template subNetwork*(network: Network, slice: untyped): Network =
 func `%`(f: proc (x: Float): Float{.closure, noSideEffect.}): JsonNode =
   newJNull()
   
-func initFromJson(dst: var ActivationFunction; jsonNode: JsonNode; jsonPath: var string) =
+func initFromJson(dst: var ActivationFunction, jsonNode: JsonNode, jsonPath: var string) =
     let name = jsonNode{"name"}.getStr()
     dst = name.getActivationFunction()
 
@@ -472,7 +474,7 @@ func `$`*(network: Network): string =
             result &= "\n"
 
 func weightIndex*(inNeuron, outNeuron, numInputs, numOutputs: int): int =
-    outNeuron + numOutputs * inNeuron;
+    outNeuron + numOutputs * inNeuron
 
 #----------- Feed Forward Functions -----------#
 
@@ -488,10 +490,28 @@ func feedForwardLayer(
 
     result = layer.bias
     
-    for inNeuron in 0..<layer.numInputs:
-        for outNeuron in 0..<layer.numOutputs:
-            let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
-            result[outNeuron] += layer.weights[i] * input[inNeuron]
+    # input * weightMatrix = result ()
+    # for inNeuron in 0..<layer.numInputs:
+    #     for outNeuron in 0..<layer.numOutputs:
+    #         let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
+    #         result[outNeuron] += layer.weights[i] * input[inNeuron]
+
+    # matrix-vector-multiplication
+    # Y = alpha*A*X + beta*Y
+    gemv(
+        order = colMajor,
+        TransA = noTranspose,
+        M = layer.numOutputs,
+        N = layer.numInputs,
+        alpha = 1.Float,
+        A = addr layer.weights[0],
+        lda = layer.numOutputs,
+        X = addr input[0],
+        incX = 1,
+        beta = 0.Float, #
+        Y = addr result[0],
+        incY = 1
+    )
 
     when layerBackpropInfo isnot Nothing:
         layerBackpropInfo.preActivation = result
@@ -633,29 +653,36 @@ func backPropagateLayer(
         layerBackpropInfo.biasGradient[outNeuron] =
             layer.activation.df(layerBackpropInfo.preActivation[outNeuron]) * outGradient[outNeuron]
 
+
+    # inPostActivation * biasGradient = weightsGradient (outer product)
     # for inNeuron in 0..<layer.numInputs:
     #     for outNeuron in 0..<layer.numOutputs:
     #         let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
     #         layerBackpropInfo.weightsGradient[i] +=
     #             inPostActivation[inNeuron] * layerBackpropInfo.biasGradient[outNeuron]
-    #         if calculateInputGradient:
-    #             layerBackpropInfo.inputGradient[inNeuron] +=
-    #                 layer.weights[i] * layerBackpropInfo.biasGradient[outNeuron]
-    # ^this is implemented below using OpenMP to utilize SIMD instructions
-    {.emit: ["""
-    for(size_t inNeuron = 0; inNeuron < """, layer.numInputs, """; ++inNeuron){
-        """, Float, """* in_neurons_gradient_in = """, layerBackpropInfo.inputGradient, """.p->data;
-        #pragma omp simd reduction(+ : in_neurons_gradient_in[inNeuron])
-        for(size_t outNeuron = 0; outNeuron < """, layer.numOutputs, """; ++outNeuron){
-            const size_t i = """, weightIndex, """(inNeuron, outNeuron, """, layer.numInputs, """,""", layer.numOutputs, """);
-            """, layerBackpropInfo.weightsGradient, """.p->data[i] +=
-                """, inPostActivation, """[inNeuron] * """, layerBackpropInfo.biasGradient, """.p->data[outNeuron];
-            if(""",calculateInputGradient,""")
-            in_neurons_gradient_in[inNeuron] +=
-                """, layer.weights, """.p->data[i] * """, layerBackpropInfo.biasGradient, """.p->data[outNeuron];
-        }
-    }    
-    """].}#"""
+
+    # outer product (vector-vector multiplication)
+    # A = alpha*X*Y + A
+    ger(
+        order = rowMajor,
+        M = layer.numInputs,
+        N = layer.numOutputs,
+        alpha = 1.Float,
+        X = addr inPostActivation[0],
+        incX = 1,
+        Y = addr layerBackpropInfo.biasGradient[0],
+        incY = 1,
+        A = addr layerBackpropInfo.weightsGradient[0],
+        lda = layer.numOutputs
+    )
+
+    
+    if calculateInputGradient:
+        for inNeuron in 0..<layer.numInputs:
+            for outNeuron in 0..<layer.numOutputs:
+                let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
+                layerBackpropInfo.inputGradient[inNeuron] +=
+                    layer.weights[i] * layerBackpropInfo.biasGradient[outNeuron]
 
 func backPropagateLayer(
     layer: Layer,
