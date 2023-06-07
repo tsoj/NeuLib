@@ -73,7 +73,7 @@ Compile it with `nim r train.nim`.
 
 ### Notes for compiling
 
-Use `-d:danger`, `-cc:clang` and `-d:openmp` flags for optimal performance.
+Use `-d:danger`, `--cc:clang` and `-d:openmp` flags for optimal performance.
 
 
 
