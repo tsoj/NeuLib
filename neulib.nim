@@ -413,7 +413,7 @@ template subNetwork*(network: Network, slice: untyped): Network =
 func `%`(f: proc (x: Float): Float{.closure, noSideEffect.}): JsonNode =
   newJNull()
   
-func initFromJson(dst: var ActivationFunction; jsonNode: JsonNode; jsonPath: var string) =
+func initFromJson(dst: var ActivationFunction, jsonNode: JsonNode, jsonPath: var string) =
     let name = jsonNode{"name"}.getStr()
     dst = name.getActivationFunction()
 
@@ -472,7 +472,7 @@ func `$`*(network: Network): string =
             result &= "\n"
 
 func weightIndex*(inNeuron, outNeuron, numInputs, numOutputs: int): int =
-    outNeuron + numOutputs * inNeuron;
+    outNeuron + numOutputs * inNeuron
 
 #----------- Feed Forward Functions -----------#
 
