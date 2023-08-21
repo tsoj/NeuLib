@@ -1,5 +1,6 @@
 neulib*
 !neulib.nim
+!neulib2.nim
 callgrind.out.*
 mnist
 train
