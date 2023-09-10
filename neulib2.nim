@@ -247,7 +247,7 @@ func initKaimingNormal*[T: SomeNumber](network: var Network[T], randState: var R
         let std = sqrt(2.T / layer.numInputs.T)
 
         for v in layer.weights.mitems:
-            v = randState.gauss(mu = 0.0, sigma = std)
+            v = randState.gauss(mu = 0.0, sigma = std.float).T
 
 func initKaimingNormal*(network: var Network, seed: int64 = 0) =
     ## Randomly initializes the parameters of `network` using a method described in
@@ -356,13 +356,51 @@ func toNetwork*(jsonString: string, T: typedesc[SomeNumber]): Network[T] =
 
     {.cast(noSideEffect).}:
         let jsonNode = jsonString.parseJson
-    result = to(jsonNode, Network[T])
+    result = jsonNode.to Network[T]
+
+func toBinary(number: SomeInteger): seq[uint8] =
+
+    var number = number
+    for i in 0..<sizeof(number):
+        result &= cast[uint8](number and 0b1111_1111)
+        number = number shr 8
+
+func toBinary(number: float32 or float64): seq[uint8] =
+    when number is float32:
+        toBinary cast[uint32](number)
+    else:
+        toBinary cast[uint64](number)
+
+func fromBinary(data: openArray[uint8], T: typedesc[SomeInteger]): T =
+
+    doAssert data.len == sizeof T
+
+    for i in 0..<sizeof(T):
+        result = result shl 8
+        result &= cast[uint8](data[i])
+
+func fromBinary(data: openArray[uint8], T: typedesc[float32 or float64]): T =
+    when T is float32:
+        cast[float32](data.fromBinary uint32)
+    else:
+        cast[float64](data.fromBinary uint64)
+
+consumeFromBinary
+
+
+func toBinary[T: SomeNumber](layer: Layer[T]): seq[uint8] =
+    discard
+    result
+    
+func fromBinary[T: SomeNumber](data: seq[uint8], L: typedesc[Layer[T]]): Layer[T] =
+    discard
+    
 
 var network = newNetwork[float32](35, (16, relu), (1, sigmoid))
 echo network.description
 writeFile "test.json", network.toJsonString
-network = newNetwork[float32](22, (16, relu), (1, sigmoid))
-echo network.description
-network = readFile("test.json").toNetwork(float32)
-echo network.description
-writeFile "test2.json", network.toJsonString
+# network = newNetwork[float32](22, (16, relu), (1, sigmoid))
+# echo network.description
+# network = readFile("test.json").toNetwork(float32)
+# echo network.description
+# writeFile "test2.json", network.toJsonString
