@@ -16,7 +16,7 @@ type
         numOutputs*: int
         activation*: ActivationFunction
     Network*[T: SomeNumber] = object
-        layers*: seq[T]
+        layers*: seq[Layer[T]]
     SparseElement*[T: SomeNumber] = tuple[index: int, value: SomeNumber]
     LayerBackpropInfo*[T: SomeNumber] = object
         biasGradient*: seq[T]
@@ -26,9 +26,10 @@ type
         inputGradient: seq[T]
     BackpropInfo*[T: SomeNumber] = object
         layers*: seq[LayerBackpropInfo[T]]
-        input: seq[T]
-        sparseInput: seq[SparseElement[T]]
         numSummedGradients*: int
+        case isSparseInput: bool
+        of true: sparseInput: seq[SparseElement[T]]
+        of false: input: seq[T]
 
 #----------- Utility Functions -----------#
 
@@ -200,3 +201,104 @@ func newBackpropInfo*[T: SomeNumber](network: Network[T]): BackpropInfo[T] =
             inputGradient: newSeq[T](layer.numInputs)
         ))
     result.setZero
+
+func inputGradient*[T: SomeNumber](backpropInfo: BackpropInfo[T]): seq[T] =
+    ## Returns the input gradient that has been calculated during a backward pass.
+    ## The parameter `calculateInputGradient` must be set to `true` for that,
+    ## when calling `backward <#backward,Network,openArray[Float],BackpropInfo,staticbool>`_.
+
+    doAssert backpropInfo.layers.len >= 1, "BackpropInfo needs at least one input layer and one output layer"
+    doAssert backpropInfo.layers[0].inputGradient.len > 0, "Input gradient needs to be calculated before being used"
+    backpropInfo.layers[0].inputGradient
+
+func addGradient*[T: SomeNumber](network: var Network[T], backpropInfo: BackpropInfo[T], lr: T) =
+    ## Applies the gradient accumulated during backwards passes in `backpropInfo` to `network`.
+    ## Learning rate can be specified with `lr`.
+
+    assert network.layers.len == backpropInfo.layers.len
+
+    for layerIndex in 0..<network.layers.len:
+        assert network.layers[layerIndex].bias.len == backpropInfo.layers[layerIndex].biasGradient.len
+        assert network.layers[layerIndex].weights.len == backpropInfo.layers[layerIndex].weightsGradient.len
+        
+        network.layers[layerIndex].bias -= (lr / backpropInfo.numSummedGradients.T) * backpropInfo.layers[layerIndex].biasGradient
+
+        network.layers[layerIndex].weights -= (lr / backpropInfo.numSummedGradients.T) * backpropInfo.layers[layerIndex].weightsGradient
+
+func newLayer(numInputs, numOutputs: int, activation: ActivationFunction, T: typedesc[SomeNumber]): Layer[T] =
+    assert numInputs > 0 and numOutputs > 0
+
+    Layer[T](
+        bias: newSeq[T](numOutputs),
+        weights: newSeq[T](numInputs * numOutputs),
+        numInputs: numInputs,
+        numOutputs: numOutputs,
+        activation: activation
+    )
+
+func initKaimingNormal*[T: SomeNumber](network: var Network[T], randState: var Rand) =
+    ## Randomly initializes the parameters of `network` using a method described in
+    ## `"Delving Deep into Rectifiers: Surpassing Human-Level Performance on ImageNet Classification"
+    ## <https://arxiv.org/abs/1502.01852>`_.
+
+    for layer in network.layers.mitems:
+        layer.bias = newSeq[T](layer.bias.len) # set bias to zero
+
+        let std = sqrt(2.T / layer.numInputs.T)
+
+        for v in layer.weights.mitems:
+            v = randState.gauss(mu = 0.0, sigma = std)
+
+func initKaimingNormal*(network: var Network, seed: int64 = 0) =
+    ## Randomly initializes the parameters of `network` using a method described in
+    ## `"Delving Deep into Rectifiers: Surpassing Human-Level Performance on ImageNet Classification"
+    ## <https://arxiv.org/abs/1502.01852>`_.
+
+    var randState: Rand = initRand(seed)
+    network.initKaimingNormal(randState)
+
+func newNetwork*[T: SomeNumber](
+    input: int,
+    ls: varargs[tuple[numNeurons: int, activation: ActivationFunction]]
+): Network[T] =
+    ## Creates new instance of `Network`.
+    ## `input` is the number of input units.
+    ## `layers` describes how many neurons the following layers have and which activation function they use.
+    ## The model will be randomly initialized using Kaiming initialization.
+    ## 
+    ## Example:
+    ##
+    ## .. code-block:: Nim
+    ##
+    ##   var model = newNetwork(
+    ##     784,
+    ##     (40, relu),
+    ##     (40, relu),
+    ##     (10, sigmoid)
+    ##   )
+    ## 
+    ## Describes a model that looks like this:
+    ## 
+    ## .. code-block::
+    ## 
+    ##   input:  784 neurons
+    ##                \/ 
+    ##   hidden:  40 neurons -> relu
+    ##                ||
+    ##   hidden:  40 neurons -> relu
+    ##                \/
+    ##   output:  10 neurons -> sigmoid
+
+    doAssert ls.len >= 1, "Network needs at least one layer"
+
+    for i in 0..<ls.len:
+        result.layers.add(newLayer(
+            numInputs = if i == 0: input else: ls[i-1].numNeurons,
+            numOutputs = ls[i].numNeurons,
+            activation = ls[i].activation,
+            T = T
+        ))
+
+    # result.initKaimingNormal(seed = 0)
+
+var network = newNetwork[float32](768, (12, relu))
