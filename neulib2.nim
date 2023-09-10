@@ -299,6 +299,70 @@ func newNetwork*[T: SomeNumber](
             T = T
         ))
 
-    # result.initKaimingNormal(seed = 0)
+    result.initKaimingNormal(seed = 0)
 
-var network = newNetwork[float32](768, (12, relu))
+func description*[T: SomeNumber](network: Network[T]): string =
+    ## Returns a string conveying some basic information about the structure  of the network.
+
+    if network.layers.len == 0:
+        return
+
+    result &= "Number type: " & $T & "\n"
+
+    var maxLength = len($network.layers[0].numInputs)
+    for layer in network.layers:
+        maxLength = max(maxLength, len($layer.numOutputs))
+    
+    func getNumberString(num: int): string =
+        result = $num
+        while result.len < maxLength:
+            result = " " & result
+
+    let spacesBeforeWeights = block:
+        var s = ""
+        for i in 0..<(maxLength + "neurons".len) div 2:
+            s &= " "
+        s
+
+    result &= "Input:  " & getNumberString(network.layers[0].numInputs) & " neurons\n"
+
+    for i, layer in network.layers.pairs:
+        result &= "        "
+        result &= spacesBeforeWeights & (
+            if layer.numOutputs > layer.numInputs: "/\\\n"
+            elif layer.numOutputs < layer.numInputs: "\\/\n"
+            else: "||\n"
+        )
+        let isLast = i == network.layers.len - 1
+        if isLast:
+            result &= "Output: "
+        else:
+            result &= "Hidden: "
+
+        result &= getNumberString(layer.numOutputs) & " neurons -> " & $layer.activation
+        
+        if not isLast:
+            result &= "\n"
+
+func toJsonString*(network: Network): string =
+    ## Returns the JSON represenation of `network`.
+
+    {.cast(noSideEffect).}:
+        let a = %*(network)
+        pretty(a)
+
+func toNetwork*(jsonString: string, T: typedesc[SomeNumber]): Network[T] =
+    ## Creates a `Network` from a JSON formatted string representation.
+
+    {.cast(noSideEffect).}:
+        let jsonNode = jsonString.parseJson
+    result = to(jsonNode, Network[T])
+
+var network = newNetwork[float32](35, (16, relu), (1, sigmoid))
+echo network.description
+writeFile "test.json", network.toJsonString
+network = newNetwork[float32](22, (16, relu), (1, sigmoid))
+echo network.description
+network = readFile("test.json").toNetwork(float32)
+echo network.description
+writeFile "test2.json", network.toJsonString
