@@ -7,15 +7,6 @@ import std/[
     streams
 ]
 
-
-when (compiles do: import zippy):
-  import zippy
-  const useZippy = false
-else:
-  const useZippy = false
-
-static: echo "Using zippy for file compression: ", useZippy
-
 type
     ActivationFunction = enum
         relu, leakyRelu, sigmoid, tanh
@@ -404,101 +395,27 @@ proc readNetwork*[T: SomeNumber](stream: Stream, network: var Network[T]) =
 
     stream.readSeq network.layers, readLayer
 
-when useZippy:
-    proc writeNetworkCompressed*[T: SomeNumber](stream: Stream, network: Network[T]) =
-        var stringStream = newStringStream()
-        stringStream.writeNetwork network
-        stringStream.flush
-        stringStream.setPosition 0
-
-        var data: seq[uint8]
-        while not stringStream.atEnd:
-            data.add stringStream.readUint8
-        stringStream.close
-
-        data = data.compress
-        for b in data:
-            stream.write b.uint8
-        
-
-        # let tmp = stringStream.readAll
-        # writeFile "what.bin", tmp
-        # let networkAsString = tmp.compress
-        # stringStream.close
-
-        # echo networkAsString
-        # echo "tmp: ", tmp
-
-        # stream.write networkAsString.len.int64
-        # stream.write networkAsString
-
-    proc readNetworkCompressed*[T: SomeNumber](stream: Stream, network: var Network[T]) =
-        var data: seq[uint8]
-        while not stream.atEnd:
-            data.add stream.readUint8
-        data = data.uncompress
-
-        var stringStream = newStringStream()
-        for b in data:
-            stringStream.write b.uint8
-
-        stringStream.flush
-        stringStream.setPosition 0
-        stringStream.readNetwork network
-        stringStream.close
-
-
-
-        # echo "hi1"
-        # let
-        #     len = stream.readInt64
-
-        # echo "hi2: ", len
-
-        # let networkAsString = stream.readStr(length = len)
-            
-        # var stringStream = newStringStream()
-        # echo "hi1"
-        # stringStream.write networkAsString.uncompress
-        # echo "hi2"
-        # stringStream.flush()
-        # echo "hi3"
-        # stringStream.setPosition(0)
-        # echo "hi4"
-        # stringStream.readNetwork network
-        # echo "hi5"
-        # stringStream.close
-        
-
 proc saveToFile*[T: SomeNumber](network: Network[T], fileName: string) =
     var fileStream = newFileStream(fileName, fmWrite)
     if fileStream.isNil:
         raise newException(IOError, "Couldn't open file: " & fileName)
-
-    when useZippy:
-        fileStream.writeNetworkCompressed network
-    else:
-        fileStream.writeNetwork network
+    fileStream.writeNetwork network
     fileStream.close
 
 proc loadFromFile*[T](network: var Network[T], fileName: string) =
     var fileStream = newFileStream(fileName, fmRead)
     if fileStream.isNil:
         raise newException(IOError, "Couldn't open file: " & fileName)
-
-    when useZippy:
-        fileStream.readNetworkCompressed network
-    else:
-        fileStream.readNetwork network
+    fileStream.readNetwork network
     fileStream.close
 
-var network = newNetwork[float32](1_000_000, (16, relu), (3, sigmoid))
+var network = newNetwork[float32](3_500_000, (16, relu), (3, sigmoid))
 echo network.description
-writeFile "test.json", network.toJsonString
+# writeFile "test.json", network.toJsonString
 
-network.saveToFile "test8.bin"
+network.saveToFile "test9.bin"
 
 var network2: Network[float32]
-network2.loadFromFile "test8.bin"
+network2.loadFromFile "test9.bin"
 echo network2.description
-writeFile "test2.json", network2.toJsonString
+# writeFile "test2.json", network2.toJsonString
