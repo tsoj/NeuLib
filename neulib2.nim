@@ -3,8 +3,18 @@ import std/[
     sequtils,
     random,
     json,
-    strformat
+    strformat,
+    streams
 ]
+
+
+when (compiles do: import zippy/gzip):
+  import zippy/gzip
+  const useZippy = true
+else:
+  const useZippy = false
+
+static: echo "Using zippy for file compression: ", useZippy
 
 type
     ActivationFunction = enum
@@ -358,49 +368,78 @@ func toNetwork*(jsonString: string, T: typedesc[SomeNumber]): Network[T] =
         let jsonNode = jsonString.parseJson
     result = jsonNode.to Network[T]
 
-func toBinary(number: SomeInteger): seq[uint8] =
-
-    var number = number
-    for i in 0..<sizeof(number):
-        result &= cast[uint8](number and 0b1111_1111)
-        number = number shr 8
-
-func toBinary(number: float32 or float64): seq[uint8] =
-    when number is float32:
-        toBinary cast[uint32](number)
-    else:
-        toBinary cast[uint64](number)
-
-func fromBinary(data: openArray[uint8], T: typedesc[SomeInteger]): T =
-
-    doAssert data.len == sizeof T
-
-    for i in 0..<sizeof(T):
-        result = result shl 8
-        result &= cast[uint8](data[i])
-
-func fromBinary(data: openArray[uint8], T: typedesc[float32 or float64]): T =
-    when T is float32:
-        cast[float32](data.fromBinary uint32)
-    else:
-        cast[float64](data.fromBinary uint64)
-
-consumeFromBinary
-
-
-func toBinary[T: SomeNumber](layer: Layer[T]): seq[uint8] =
-    discard
-    result
+proc writeSeq[T](stream: Stream, x: seq[T], writeProc: proc(s: Stream, x: T)) =
+    stream.write x.len.int64
+    for a in x:
+        stream.writeProc a
     
-func fromBinary[T: SomeNumber](data: seq[uint8], L: typedesc[Layer[T]]): Layer[T] =
-    discard
-    
+proc readSeq[T](stream: Stream, r: var seq[T], readProc: proc(s: Stream, x: var T)) =
+    let len = stream.readInt64
+    for i in 0..<len:
+        var element: T
+        stream.readProc element
+        r.add element
 
-var network = newNetwork[float32](35, (16, relu), (1, sigmoid))
+proc writeLayer[T: SomeNumber](stream: Stream, layer: Layer[T]) =
+    stream.writeSeq layer.bias, write
+    stream.writeSeq layer.weights, write
+    stream.write layer.numInputs.int64
+    stream.write layer.numOutputs.int64
+    stream.write layer.activation.int64
+    
+proc readLayer[T: SomeNumber](stream: Stream, layer: var Layer[T]) =
+    stream.readSeq layer.bias, read
+    stream.readSeq layer.weights, read
+    layer.numInputs = stream.readInt64
+    layer.numOutputs = stream.readInt64
+    layer.activation = stream.readInt64.ActivationFunction
+
+proc writeNetwork*[T: SomeNumber](stream: Stream, network: Network[T]) =
+    stream.writeLine($T)
+    stream.writeSeq network.layers, writeLayer
+
+proc readNetwork*[T: SomeNumber](stream: Stream, network: var Network[T]) =
+    let streamNetworkBaseType = stream.readLine
+    doAssert streamNetworkBaseType == $T, "Stream is a representation of Network[" & streamNetworkBaseType & "], but expected a Network[" & $T & "]"
+
+    stream.readSeq network.layers, readLayer
+
+when useZippy:
+    proc writeNetworkCompressed*[T: SomeNumber](stream: FileStream, network: Network[T]) =
+        discard
+
+    proc readNetworkCompressed*[T: SomeNumber](stream: FileStream, network: var Network[T]) =
+        discard
+
+proc saveToFile*[T: SomeNumber](network: Network[T], fileName: string) =
+    var fileStream = newFileStream(fileName, fmWrite)
+    if fileStream.isNil:
+        raise newException(IOError, "Couldn't open file: " & fileName)
+
+    when useZippy:
+        fileStream.writeNetworkCompressed network
+    else:
+        fileStream.writeNetwork network
+    fileStream.close
+
+proc loadFromFile*[T](network: var Network[T], fileName: string) =
+    var fileStream = newFileStream(fileName, fmRead)
+    if fileStream.isNil:
+        raise newException(IOError, "Couldn't open file: " & fileName)
+
+    when useZippy:
+        fileStream.readNetworkCompressed network
+    else:
+        fileStream.readNetwork network
+    fileStream.close
+
+var network = newNetwork[float32](100, (32, relu), (1, sigmoid))
 echo network.description
 writeFile "test.json", network.toJsonString
-# network = newNetwork[float32](22, (16, relu), (1, sigmoid))
-# echo network.description
-# network = readFile("test.json").toNetwork(float32)
-# echo network.description
-# writeFile "test2.json", network.toJsonString
+
+network.saveToFile "test2.bin"
+
+var network2: Network[float32]
+network2.loadFromFile "test4.bin"
+echo network2.description
+writeFile "test2.json", network2.toJsonString
