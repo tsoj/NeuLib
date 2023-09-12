@@ -18,19 +18,22 @@ type
         activation*: ActivationFunction
     Network*[T: SomeNumber] = object
         layers*: seq[Layer[T]]
-    SparseElement*[T: SomeNumber] = tuple[index: int, value: SomeNumber]
-    LayerBackpropInfo*[T: SomeNumber] = object
-        biasGradient*: seq[T]
-        weightsGradient*: seq[T]
+    SparseElement*[T: SomeNumber] = tuple[index: int, value: T]
+    LayerBackpropInfo[T: SomeNumber] = object
         preActivation: seq[T]
         postActivation: seq[T]
+        biasGradient: seq[T]
+        weightsGradient: seq[T]
         inputGradient: seq[T]
-    BackpropInfo*[T: SomeNumber] = object
-        layers*: seq[LayerBackpropInfo[T]]
-        numSummedGradients*: int
+    NetworkInput[T: SomeNumber] = object
         case isSparseInput: bool
         of true: sparseInput: seq[SparseElement[T]]
         of false: input: seq[T]
+    BackpropInfo*[T: SomeNumber] = object
+        layers: seq[LayerBackpropInfo[T]]
+        numSummedGradients: int
+        input: NetworkInput[T]
+    Nothing = tuple[]
 
 #----------- Utility Functions -----------#
 
@@ -104,7 +107,7 @@ func `/`*[T: SomeNumber](x: T, y: openArray[T]): seq[T] =
 
 #----------- Activation and Loss Functions -----------#
 
-func getActivationFunction*(activation: ActivationFunction, T: typedesc[SomeNumber]): auto =
+func getActivationFunction*[T: SomeNumber](activation: ActivationFunction): auto =
     case activation:
     of relu: return proc(x: T): T = (if x > 0: x else: 0)
     of leakyRelu: return proc(x: T): T = (if x > 0: x else: 0.01.T * x)
@@ -119,7 +122,7 @@ func getActivationFunction*(activation: ActivationFunction, T: typedesc[SomeNumb
         else:
             return proc(x: T): T = (x.tanh)
 
-func getActivationFunctionDerivative*(activation: ActivationFunction, T: typedesc[SomeNumber]): auto =
+func getActivationFunctionDerivative*[T: SomeNumber](activation: ActivationFunction): auto =
     static: doAssert T is SomeFloat, "Derivative not available as integer function"
     case activation:
     of relu: return proc(x: T): T = (if x > 0: 1 else: 0)
@@ -127,7 +130,7 @@ func getActivationFunctionDerivative*(activation: ActivationFunction, T: typedes
     of sigmoid: return proc(x: T): T =
         let t = 1.T / (1.T + exp(-x))
         t * (1.T - t)
-    of tanh: return proc(x: T): T = 1.T - pow(tanh(x), 2.T)
+    of tanh: return proc(x: T): T = 1.T - pow(x.tanh, 2.T)
 
 func customLossGradient*[TOut: SomeNumber, TIn](
     target: openArray[TIn],
@@ -196,7 +199,7 @@ func newBackpropInfo*[T: SomeNumber](network: Network[T]): BackpropInfo[T] =
     ## Creates `BackpropInfo` that can be used to do backwards passes with `network`.
 
     for layer in network.layers:
-        result.layers.add(LayerBackpropInfo(
+        result.layers.add(LayerBackpropInfo[T](
             biasGradient: layer.bias,
             weightsGradient: layer.weights,
             inputGradient: newSeq[T](layer.numInputs)
@@ -226,7 +229,7 @@ func addGradient*[T: SomeNumber](network: var Network[T], backpropInfo: Backprop
 
         network.layers[layerIndex].weights -= (lr / backpropInfo.numSummedGradients.T) * backpropInfo.layers[layerIndex].weightsGradient
 
-func newLayer(numInputs, numOutputs: int, activation: ActivationFunction, T: typedesc[SomeNumber]): Layer[T] =
+func newLayer[T: SomeNumber](numInputs, numOutputs: int, activation: ActivationFunction): Layer[T] =
     assert numInputs > 0 and numOutputs > 0
 
     Layer[T](
@@ -293,11 +296,10 @@ func newNetwork*[T: SomeNumber](
     doAssert ls.len >= 1, "Network needs at least one layer"
 
     for i in 0..<ls.len:
-        result.layers.add(newLayer(
+        result.layers.add(newLayer[T](
             numInputs = if i == 0: input else: ls[i-1].numNeurons,
             numOutputs = ls[i].numNeurons,
-            activation = ls[i].activation,
-            T = T
+            activation = ls[i].activation
         ))
 
     result.initKaimingNormal(seed = 0)
@@ -352,7 +354,7 @@ func toJsonString*(network: Network): string =
         let a = %*(network)
         pretty(a)
 
-func toNetwork*(jsonString: string, T: typedesc[SomeNumber]): Network[T] =
+func toNetwork*[T: SomeNumber](jsonString: string): Network[T] =
     ## Creates a `Network` from a JSON formatted string representation.
 
     {.cast(noSideEffect).}:
@@ -420,17 +422,209 @@ proc loadFromFile*[T: SomeNumber](network: var Network[T], fileName: string) =
     fileStream.readNetwork network
     fileStream.close
 
+func weightIndex*(inNeuron, outNeuron, numInputs, numOutputs: int): int =
+    outNeuron + numOutputs * inNeuron
+
+#----------- Feed Forward Functions -----------#
+
+func feedForwardLayer[T: SomeNumber](
+    layer: Layer[T],
+    input: openArray[T or SparseElement[T]],
+    layerBackpropInfo: var (Nothing or LayerBackpropInfo[T])
+): seq[T] =
+
+    assert layer.bias.len == layer.numOutputs
+    assert layer.weights.len == layer.numInputs * layer.numOutputs
+
+    result = layer.bias
+
+    when input is openArray[SparseElement[T]]:
+        for (inNeuron, value) in input:
+            assert inNeuron in 0..<layer.numInputs
+            for outNeuron in 0..<layer.numOutputs:
+                let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
+                result[outNeuron] += layer.weights[i] * value
+    else:
+        assert input.len == layer.numInputs
+        for inNeuron in 0..<layer.numInputs:
+            for outNeuron in 0..<layer.numOutputs:
+                let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
+                result[outNeuron] += layer.weights[i] * input[inNeuron]
+
+    when layerBackpropInfo isnot Nothing:
+        layerBackpropInfo.preActivation = result
+
+    for value in result.mitems:
+        value = getActivationFunction[T](layer.activation)(value)
+
+    when layerBackpropInfo isnot Nothing:
+        layerBackpropInfo.postActivation = result
+
+func forwardInternal[T: SomeNumber](
+    network: Network[T],
+    input: openArray[T or SparseElement[T]],
+    backpropInfo: var (BackpropInfo or Nothing)
+): seq[T] =
+
+    doAssert network.layers.len >= 1, "Network needs at least one input layer and one output layer"
+
+    result = newSeq[T](network.layers[^1].numOutputs)
+
+    doAssert result.len == network.layers[^1].numOutputs, "Output size and output size of last layer must be the same"
+    doAssert(
+        input.len == network.layers[0].numInputs or input is openArray[SparseElement[T]],
+        fmt"Input size ({input.len}) and input size of first layer ({network.layers[0].numInputs}) must be the same"
+    )
+
+    when backpropInfo isnot Nothing:
+        doAssert backpropInfo.layers.len == network.layers.len
+        when input is openArray[T]:
+            backpropInfo.input = NetworkInput[T](isSparseInput: false, input: input.toSeq)
+        else:
+            static: doAssert input is openArray[SparseElement[T]]
+            backpropInfo.input = NetworkInput[T](isSparseInput: true, sparseInput: input.toSeq)
+
+    result = feedForwardLayer(
+        layer = network.layers[0],
+        input = input,
+        layerBackpropInfo = when backpropInfo is Nothing: backpropInfo else: backpropInfo.layers[0]
+    )
+
+    for i in 1..<network.layers.len:
+        result = feedForwardLayer(
+            layer = network.layers[i],
+            input = result,
+            layerBackpropInfo = when backpropInfo is Nothing: backpropInfo else: backpropInfo.layers[i]
+        )
+
+func forward*[T: SomeNumber](network: Network[T], input: openArray[T], backpropInfo: var BackpropInfo[T]): seq[T] =
+    ## Runs the network with a given input. Also collects information in `backpropInfo` for a
+    ## `backward <#backward,Network[T],openArray[T],BackpropInfo[T],staticbool>`_ pass.
+    ## Returns a `seq` with the length according to the size of the output layer of the network.
+    ## 
+    ## Note: When no information for a backward pass is needed,
+    ## use `forward(Network, openArray[T]) <#forward,Network[T],openArray[T]>`_ for better performance.
+
+    network.forwardInternal(input, backpropInfo)
+
+func forward*[T: SomeNumber](network: Network[T], input: openArray[T]): seq[T] =
+    ## Runs the network with a given input. Does not collect information for a backward pass.
+    ## Returns a `seq` with the length according to the size of the output layer of the network.
+
+    var nothing: Nothing
+    network.forwardInternal(input, nothing)
+
+func forward*[T: SomeNumber](network: Network[T], input: openArray[SparseElement[T]], backpropInfo: var BackpropInfo[T]): seq[T] =
+    ## Runs the network with a given sparse input. Also collects information in `backpropInfo` for a
+    ## `backward <#backward,Network[T],openArray[T],BackpropInfo[T],staticbool>`_ pass.
+    ## Returns a `seq` with the length according to the size of the output layer of the network.
+    ## 
+    ## Note: When no information for a backward pass is needed,
+    ## use `forward(Network[T], openArray[SparseElement[T]]) <#forward,Network,openArray[SparseElement[T]]>`_ for better performance.
+
+    network.forwardInternal(input, backpropInfo)
+
+func forward*[T: SomeNumber](network: Network[T], input: openArray[SparseElement[T]]): seq[T] =
+    ## Runs the network with a given sparse input. Does not collect information for a backward pass
+    ## Returns a `seq` with the length according to the size of the output layer of the network.
+    ## 
+    ## A sparse input consist of a `seq` which contains tuples of indices and values.
+    ## The indices indicate which input neuron is meant to have the according value.
+    ## Sparse inputs are especially useful if inputs often have many zero elements. Then
+    ## using sparse inputs can improve performance of the first layer significantly.
+
+    var nothing: Nothing
+    network.forwardInternal(input, nothing)
 
 
+func backPropagateLayer[T: SomeNumber](
+    layer: Layer[T],
+    outGradient: openArray[T],
+    inPostActivation: openArray[T or SparseElement[T]],
+    layerBackpropInfo: var LayerBackpropInfo[T],
+    calculateInputGradient: static bool = true
+) =
+    assert layerBackpropInfo.biasGradient.len == layer.numOutputs
+    assert layerBackpropInfo.weightsGradient.len == layer.numInputs * layer.numOutputs
+    assert outGradient.len == layer.numOutputs
+    assert layerBackpropInfo.inputGradient.len == layer.numInputs
+
+    for inNeuron in 0..<layer.numInputs:
+        layerBackpropInfo.inputGradient[inNeuron] = 0
+
+    for outNeuron in 0..<layer.numOutputs:
+        layerBackpropInfo.biasGradient[outNeuron] =
+            getActivationFunctionDerivative[T](layer.activation)(
+                layerBackpropInfo.preActivation[outNeuron]
+            ) * outGradient[outNeuron]
+
+    when inPostActivation is openArray[SparseElement[T]]:
+        for (inNeuron, value) in inPostActivation:
+            assert inNeuron in 0..<layer.numInputs
+            for outNeuron in 0..<layer.numOutputs:
+                let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
+                layerBackpropInfo.weightsGradient[i] +=
+                    value * layerBackpropInfo.biasGradient[outNeuron]
+    else:
+        assert inPostActivation.len == layer.numInputs
+        for inNeuron in 0..<layer.numInputs:
+            for outNeuron in 0..<layer.numOutputs:
+                let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
+                layerBackpropInfo.weightsGradient[i] +=
+                    inPostActivation[inNeuron] * layerBackpropInfo.biasGradient[outNeuron]    
+
+    when calculateInputGradient:
+        for inNeuron in 0..<layer.numInputs:
+            for outNeuron in 0..<layer.numOutputs:
+                let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
+                layerBackpropInfo.inputGradient[inNeuron] +=
+                    layer.weights[i] * layerBackpropInfo.biasGradient[outNeuron]
+
+func backward*[T: SomeNumber](
+    network: Network[T],
+    lossGradient: openArray[T],
+    backpropInfo: var BackpropInfo[T],
+    calculateInputGradient: static bool = false
+) =
+    ## Calculates and adds the gradient of all network parameters in regard to the loss gradient to `backpropInfo`.
+    ## When `calculateInputGradient` is set to false, the gradient for the input will not be calculated.
+
+    doAssert network.layers.len >= 1, "Network needs at least one input layer and one output layer"
+    doAssert lossGradient.len == network.layers[^1].numOutputs, "Loss size and output size of last layer must be the same"
+    doAssert backpropInfo.layers.len == network.layers.len, "BackpropInfo is not set up correctly for backpropagation"
+
+    for i in countdown(network.layers.len - 1, 1):
+        backPropagateLayer(
+            layer = network.layers[i],
+            outGradient = if i == network.layers.len - 1: lossGradient else: backpropInfo.layers[i + 1].inputGradient,
+            inPostActivation = backpropInfo.layers[i - 1].postActivation,
+            layerBackpropInfo = backpropInfo.layers[i]
+        )
+
+    template propagateLast(input: auto) =
+        backPropagateLayer(
+            layer = network.layers[0],
+            outGradient = if backpropInfo.layers.len <= 1: lossGradient else: backpropInfo.layers[1].inputGradient,
+            inPostActivation = input,
+            layerBackpropInfo = backpropInfo.layers[0],
+            calculateInputGradient = calculateInputGradient
+        )
+
+    case backpropInfo.input.isSparseInput:
+    of true: propagateLast(backpropInfo.input.sparseInput)
+    of false: propagateLast(backpropInfo.input.input)
+
+    backpropInfo.numSummedGradients += 1
 
 
-var network = newNetwork[float32](3_500_000, (16, relu), (3, sigmoid))
+var network = newNetwork[float32](10, (5, tanh), (2, sigmoid))
 echo network.description
-# writeFile "test.json", network.toJsonString
+var backpropInfo = newBackpropInfo[float32](network)
 
-network.saveToFile "test9.bin"
+echo network.forward(newSeq[float32](10))
+echo network.forward(newSeq[float32](10), backpropInfo)
+network.backward(@[0.5f, 0.5f], backpropInfo, calculateInputGradient = true)
+echo backpropInfo
 
-var network2: Network[float32]
-network2.loadFromFile "test9.bin"
-echo network2.description
-# writeFile "test2.json", network2.toJsonString
+network.addGradient(backpropInfo, 100.0)
+echo network.forward(newSeq[float32](10))
