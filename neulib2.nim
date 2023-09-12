@@ -386,28 +386,43 @@ proc readLayer[T: SomeNumber](stream: Stream, layer: var Layer[T]) =
     layer.activation = stream.readInt64.ActivationFunction
 
 proc writeNetwork*[T: SomeNumber](stream: Stream, network: Network[T]) =
+    ## Writes the binary representation of `network` into `stream`
+
     stream.writeLine($T)
     stream.writeSeq network.layers, writeLayer
 
 proc readNetwork*[T: SomeNumber](stream: Stream, network: var Network[T]) =
+    ## Loads `network` from `stream`, assuming a binary representation as created
+    ## by `writeNetwork <#writeNetwork,Stream,Network[T: SomeNumber]>`_.
+
     let streamNetworkBaseType = stream.readLine
     doAssert streamNetworkBaseType == $T, "Stream is a representation of Network[" & streamNetworkBaseType & "], but expected a Network[" & $T & "]"
 
     stream.readSeq network.layers, readLayer
 
 proc saveToFile*[T: SomeNumber](network: Network[T], fileName: string) =
+    ## Saves a binary representation of `network` into a file.
+    ## Can be loaded again using `loadFromFile <#loadFromFile,Network[T: SomeNumber],string>`_.
+
     var fileStream = newFileStream(fileName, fmWrite)
     if fileStream.isNil:
         raise newException(IOError, "Couldn't open file: " & fileName)
     fileStream.writeNetwork network
     fileStream.close
 
-proc loadFromFile*[T](network: var Network[T], fileName: string) =
+proc loadFromFile*[T: SomeNumber](network: var Network[T], fileName: string) =
+    ## Loads a network into `network` from a binary file that has been saved 
+    ## using `saveToFile <#saveToFile,Network[T: SomeNumber],string>`_.
+
     var fileStream = newFileStream(fileName, fmRead)
     if fileStream.isNil:
         raise newException(IOError, "Couldn't open file: " & fileName)
     fileStream.readNetwork network
     fileStream.close
+
+
+
+
 
 var network = newNetwork[float32](3_500_000, (16, relu), (3, sigmoid))
 echo network.description
