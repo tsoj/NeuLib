@@ -19,8 +19,7 @@ type
     Network*[T: SomeNumber] = object
         layers*: seq[Layer[T]]
     SparseElement*[T: SomeNumber] = tuple[index: int, value: T]
-    SparseOneElement* = object
-        index: int
+    SparseOneElement* = tuple[index: int]
     LayerBackpropInfo[T: SomeNumber] = object
         preActivation: seq[T]
         postActivation: seq[T]
@@ -56,7 +55,7 @@ func toSparseOnes*[T: SomeNumber](input: openArray[T], splitAt: T): seq[SparseOn
 
     for i, a in input.pairs:
         if a >= splitAt:
-            result.add SparseOneElement(index: i)
+            result.add((index: i))
 
 func apply*[T: SomeNumber](x: var openArray[T], y: openArray[T], op: proc(x: var T, y: T) {.noSideEffect.}) =
     doAssert x.len == y.len
@@ -474,8 +473,7 @@ func feedForwardLayer[T: SomeNumber](
                 let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
                 result[outNeuron] += layer.weights[i] * value
     elif input is openArray[SparseOneElement]:
-        for inNeuronElement in input:
-            let inNeuron = inNeuronElement.index
+        for (inNeuron) in input:
             assert inNeuron in 0..<layer.numInputs
             for outNeuron in 0..<layer.numOutputs:
                 let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
@@ -605,8 +603,7 @@ func backPropagateLayer[T: SomeNumber](
                     value * layerBackpropInfo.biasGradient[outNeuron]
 
     elif inPostActivation is openArray[SparseOneElement]:
-        for inNeuronElement in inPostActivation:
-            let inNeuron = inNeuronElement.index
+        for (inNeuron) in inPostActivation:
             assert inNeuron in 0..<layer.numInputs
             for outNeuron in 0..<layer.numOutputs:
                 let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
