@@ -8,7 +8,7 @@ import std/[
 ]
 
 type
-    ActivationFunction = enum
+    ActivationFunction* = enum
         identity, relu, leakyRelu, sigmoid, tanh
     Layer*[T: SomeNumber] = object
         bias*: seq[T]
@@ -19,16 +19,21 @@ type
     Network*[T: SomeNumber] = object
         layers*: seq[Layer[T]]
     SparseElement*[T: SomeNumber] = tuple[index: int, value: T]
+    SparseOneElement* = object
+        index: int
     LayerBackpropInfo[T: SomeNumber] = object
         preActivation: seq[T]
         postActivation: seq[T]
         biasGradient: seq[T]
         weightsGradient: seq[T]
         inputGradient: seq[T]
+    InputType = enum
+        full, sparse, sparseOnes
     NetworkInput[T: SomeNumber] = object
-        case isSparseInput: bool
-        of true: sparseInput: seq[SparseElement[T]]
-        of false: input: seq[T]
+        case isSparseInput: InputType
+        of sparse: sparseInput: seq[SparseElement[T]]
+        of sparseOnes: sparseOnesInput: seq[SparseOneElement]
+        of full: input: seq[T]
     BackpropInfo*[T: SomeNumber] = object
         layers: seq[LayerBackpropInfo[T]]
         numSummedGradients: int
@@ -37,13 +42,21 @@ type
 
 #----------- Utility Functions -----------#
 
-func toSparse*[T: SomeNumber](input: openArray[T], margin: T): seq[SparseElement] =
+func toSparse*[T: SomeNumber](input: openArray[T], margin: T = 0.01): seq[SparseElement[T]] =
     ## Returns a sparse representation of a given array. Elements that are closer to zero than `margin` will not
     ## be added to the result.
 
     for i, a in input.pairs:
         if abs(a) >= margin:
             result.add((i, a))
+
+func toSparseOnes*[T: SomeNumber](input: openArray[T], splitAt: T): seq[SparseOneElement] =
+    ## Returns a sparse ones representation of a given array. Elements that are bigger than or equal to `splitAt`
+    ## will be counted as ones, all other valus as zeros
+
+    for i, a in input.pairs:
+        if a >= splitAt:
+            result.add SparseOneElement(index: i)
 
 func apply*[T: SomeNumber](x: var openArray[T], y: openArray[T], op: proc(x: var T, y: T) {.noSideEffect.}) =
     doAssert x.len == y.len
@@ -445,7 +458,7 @@ func weightIndex*(inNeuron, outNeuron, numInputs, numOutputs: int): int =
 
 func feedForwardLayer[T: SomeNumber](
     layer: Layer[T],
-    input: openArray[T or SparseElement[T]],
+    input: openArray[T or SparseElement[T] or SparseOneElement],
     layerBackpropInfo: var (Nothing or LayerBackpropInfo[T])
 ): seq[T] =
 
@@ -460,6 +473,13 @@ func feedForwardLayer[T: SomeNumber](
             for outNeuron in 0..<layer.numOutputs:
                 let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
                 result[outNeuron] += layer.weights[i] * value
+    elif input is openArray[SparseOneElement]:
+        for inNeuronElement in input:
+            let inNeuron = inNeuronElement.index
+            assert inNeuron in 0..<layer.numInputs
+            for outNeuron in 0..<layer.numOutputs:
+                let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
+                result[outNeuron] += layer.weights[i]
     else:
         assert input.len == layer.numInputs
         for inNeuron in 0..<layer.numInputs:
@@ -478,7 +498,7 @@ func feedForwardLayer[T: SomeNumber](
 
 func forwardInternal[T: SomeNumber](
     network: Network[T],
-    input: openArray[T or SparseElement[T]],
+    input: openArray[T or SparseElement[T] or SparseOneElement],
     backpropInfo: var (BackpropInfo or Nothing)
 ): seq[T] =
 
@@ -488,17 +508,19 @@ func forwardInternal[T: SomeNumber](
 
     doAssert result.len == network.layers[^1].numOutputs, "Output size and output size of last layer must be the same"
     doAssert(
-        input.len == network.layers[0].numInputs or input is openArray[SparseElement[T]],
+        input.len == network.layers[0].numInputs or input is openArray[SparseElement[T] or SparseOneElement],
         fmt"Input size ({input.len}) and input size of first layer ({network.layers[0].numInputs}) must be the same"
     )
 
     when backpropInfo isnot Nothing:
         doAssert backpropInfo.layers.len == network.layers.len
-        when input is openArray[T]:
-            backpropInfo.input = NetworkInput[T](isSparseInput: false, input: input.toSeq)
+        when input is openArray[SparseElement[T]]:
+            backpropInfo.input = NetworkInput[T](isSparseInput: sparse, sparseInput: input.toSeq)
+        elif input is openArray[SparseOneElement]:
+            backpropInfo.input = NetworkInput[T](isSparseInput: sparseOnes, sparseOnesInput: input.toSeq)
         else:
-            static: doAssert input is openArray[SparseElement[T]]
-            backpropInfo.input = NetworkInput[T](isSparseInput: true, sparseInput: input.toSeq)
+            static: doAssert input is openArray[T]
+            backpropInfo.input = NetworkInput[T](isSparseInput: full, input: input.toSeq)
 
     result = feedForwardLayer(
         layer = network.layers[0],
@@ -513,7 +535,7 @@ func forwardInternal[T: SomeNumber](
             layerBackpropInfo = when backpropInfo is Nothing: backpropInfo else: backpropInfo.layers[i]
         )
 
-func forward*[T: SomeNumber](network: Network[T], input: openArray[T], backpropInfo: var BackpropInfo[T]): seq[T] =
+func forward*[T: SomeNumber](network: Network[T], input: openArray[T or SparseElement[T] or SparseOneElement], backpropInfo: var BackpropInfo[T]): seq[T] =
     ## Runs the network with a given input. Also collects information in `backpropInfo` for a
     ## `backward <#backward,Network[T],openArray[T],BackpropInfo[T],staticbool>`_ pass.
     ## Returns a `seq` with the length according to the size of the output layer of the network.
@@ -523,40 +545,40 @@ func forward*[T: SomeNumber](network: Network[T], input: openArray[T], backpropI
 
     network.forwardInternal(input, backpropInfo)
 
-func forward*[T: SomeNumber](network: Network[T], input: openArray[T]): seq[T] =
+func forward*[T: SomeNumber](network: Network[T], input: openArray[T or SparseElement[T] or SparseOneElement]): seq[T] =
     ## Runs the network with a given input. Does not collect information for a backward pass.
     ## Returns a `seq` with the length according to the size of the output layer of the network.
 
     var nothing: Nothing
     network.forwardInternal(input, nothing)
 
-func forward*[T: SomeNumber](network: Network[T], input: openArray[SparseElement[T]], backpropInfo: var BackpropInfo[T]): seq[T] =
-    ## Runs the network with a given sparse input. Also collects information in `backpropInfo` for a
-    ## `backward <#backward,Network[T],openArray[T],BackpropInfo[T],staticbool>`_ pass.
-    ## Returns a `seq` with the length according to the size of the output layer of the network.
-    ## 
-    ## Note: When no information for a backward pass is needed,
-    ## use `forward(Network[T], openArray[SparseElement[T]]) <#forward,Network,openArray[SparseElement[T]]>`_ for better performance.
+# func forward*[T: SomeNumber](network: Network[T], input: openArray[SparseElement[T]], backpropInfo: var BackpropInfo[T]): seq[T] =
+#     ## Runs the network with a given sparse input. Also collects information in `backpropInfo` for a
+#     ## `backward <#backward,Network[T],openArray[T],BackpropInfo[T],staticbool>`_ pass.
+#     ## Returns a `seq` with the length according to the size of the output layer of the network.
+#     ## 
+#     ## Note: When no information for a backward pass is needed,
+#     ## use `forward(Network[T], openArray[SparseElement[T]]) <#forward,Network,openArray[SparseElement[T]]>`_ for better performance.
 
-    network.forwardInternal(input, backpropInfo)
+#     network.forwardInternal(input, backpropInfo)
 
-func forward*[T: SomeNumber](network: Network[T], input: openArray[SparseElement[T]]): seq[T] =
-    ## Runs the network with a given sparse input. Does not collect information for a backward pass
-    ## Returns a `seq` with the length according to the size of the output layer of the network.
-    ## 
-    ## A sparse input consist of a `seq` which contains tuples of indices and values.
-    ## The indices indicate which input neuron is meant to have the according value.
-    ## Sparse inputs are especially useful if inputs often have many zero elements. Then
-    ## using sparse inputs can improve performance of the first layer significantly.
+# func forward*[T: SomeNumber](network: Network[T], input: openArray[SparseElement[T]]): seq[T] =
+#     ## Runs the network with a given sparse input. Does not collect information for a backward pass
+#     ## Returns a `seq` with the length according to the size of the output layer of the network.
+#     ## 
+#     ## A sparse input consist of a `seq` which contains tuples of indices and values.
+#     ## The indices indicate which input neuron is meant to have the according value.
+#     ## Sparse inputs are especially useful if inputs often have many zero elements. Then
+#     ## using sparse inputs can improve performance of the first layer significantly.
 
-    var nothing: Nothing
-    network.forwardInternal(input, nothing)
+#     var nothing: Nothing
+#     network.forwardInternal(input, nothing)
 
 
 func backPropagateLayer[T: SomeNumber](
     layer: Layer[T],
     outGradient: openArray[T],
-    inPostActivation: openArray[T or SparseElement[T]],
+    inPostActivation: openArray[T or SparseElement[T] or SparseOneElement],
     layerBackpropInfo: var LayerBackpropInfo[T],
     calculateInputGradient: static bool = true
 ) =
@@ -581,6 +603,14 @@ func backPropagateLayer[T: SomeNumber](
                 let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
                 layerBackpropInfo.weightsGradient[i] +=
                     value * layerBackpropInfo.biasGradient[outNeuron]
+
+    elif inPostActivation is openArray[SparseOneElement]:
+        for inNeuronElement in inPostActivation:
+            let inNeuron = inNeuronElement.index
+            assert inNeuron in 0..<layer.numInputs
+            for outNeuron in 0..<layer.numOutputs:
+                let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
+                layerBackpropInfo.weightsGradient[i] += layerBackpropInfo.biasGradient[outNeuron]
     else:
         assert inPostActivation.len == layer.numInputs
         for inNeuron in 0..<layer.numInputs:
@@ -627,23 +657,24 @@ func backward*[T: SomeNumber](
         )
 
     case backpropInfo.input.isSparseInput:
-    of true: propagateLast(backpropInfo.input.sparseInput)
-    of false: propagateLast(backpropInfo.input.input)
+    of sparse: propagateLast(backpropInfo.input.sparseInput)
+    of sparseOnes: propagateLast(backpropInfo.input.sparseOnesInput)
+    of full: propagateLast(backpropInfo.input.input)
 
     backpropInfo.numSummedGradients += 1
 
 
-var network = newNetwork[float32](10, (5, leakyRelu), (2, identity))
-echo network.description
-var backpropInfo = newBackpropInfo[float32](network)
+# var network = newNetwork[float32](10, (5, leakyRelu), (2, identity))
+# echo network.description
+# var backpropInfo = newBackpropInfo[float32](network)
 
-echo network.forward(newSeq[float32](10))
-echo network.forward(newSeq[float32](10), backpropInfo)
-network.backward(@[-0.5f, -0.5f], backpropInfo, calculateInputGradient = true)
-echo backpropInfo
+# echo network.forward(newSeq[float32](10))
+# echo network.forward(newSeq[float32](10), backpropInfo)
+# network.backward(@[-0.5f, -0.5f], backpropInfo, calculateInputGradient = true)
+# echo backpropInfo
 
-network.addGradient(backpropInfo, 1.0)
-echo network.forward(newSeq[float32](10))
+# network.addGradient(backpropInfo, 1.0)
+# echo network.forward(newSeq[float32](10))
 
-var network2 = network.convertTo(int16, 100.0)
-echo network2.forward(newSeq[int16](10))
+# var network2 = network.convertTo(int16, 100.0)
+# echo network2.forward(newSeq[int16](10))
