@@ -9,7 +9,7 @@ import std/[
 
 type
     ActivationFunction = enum
-        relu, leakyRelu, sigmoid, tanh
+        identity, relu, leakyRelu, sigmoid, tanh
     Layer*[T: SomeNumber] = object
         bias*: seq[T]
         weights*: seq[T]
@@ -109,22 +109,24 @@ func `/`*[T: SomeNumber](x: T, y: openArray[T]): seq[T] =
 
 func getActivationFunction*[T: SomeNumber](activation: ActivationFunction): auto =
     case activation:
+    of identity: return proc(x: T): T = x
     of relu: return proc(x: T): T = (if x > 0: x else: 0)
     of leakyRelu: return proc(x: T): T = (if x > 0: x else: 0.01.T * x)
     of sigmoid: 
         when T is SomeInteger:
-            doAssert false, "simgoid not available as integer function"
+            doAssert false, "sigmoid not available as integer function"
         else:
             return proc(x: T): T = (1.T / (1.T + exp(-x)))
     of tanh: 
         when T is SomeInteger:
-            doAssert false, "simgoid not available as integer function"
+            doAssert false, "tanh not available as integer function"
         else:
             return proc(x: T): T = (x.tanh)
 
 func getActivationFunctionDerivative*[T: SomeNumber](activation: ActivationFunction): auto =
     static: doAssert T is SomeFloat, "Derivative not available as integer function"
     case activation:
+    of identity: return proc(x: T): T = 1.T
     of relu: return proc(x: T): T = (if x > 0: 1 else: 0)
     of leakyRelu: return proc(x: T): T = (if x > 0: 1 else: 0.01)
     of sigmoid: return proc(x: T): T =
@@ -194,6 +196,20 @@ func setZero*(backpropInfo: var BackpropInfo) =
         layerBackpropInfo.weightsGradient.setZero
         layerBackpropInfo.inputGradient.setZero
     backpropInfo.numSummedGradients = 0
+
+func convertTo[TIn: SomeNumber](x: seq[TIn], TOut: typedesc[SomeNumber], paramMultiplier: BiggestFloat = 1.0): seq[TOut] =
+    for a in x:
+        result.add (a.BiggestFloat * paramMultiplier).TOut
+
+func convertTo*(network: Network, TOut: typedesc[SomeNumber], paramMultiplier: BiggestFloat = 1.0): Network[TOut] =
+    for layer in network.layers:
+        result.layers.add Layer[TOut](
+            bias: layer.bias.convertTo(TOut, paramMultiplier),
+            weights: layer.weights.convertTo(TOut, paramMultiplier),
+            numInputs: layer.numInputs,
+            numOutputs: layer.numOutputs,
+            activation: layer.activation
+        )
 
 func newBackpropInfo*[T: SomeNumber](network: Network[T]): BackpropInfo[T] =
     ## Creates `BackpropInfo` that can be used to do backwards passes with `network`.
@@ -617,14 +633,17 @@ func backward*[T: SomeNumber](
     backpropInfo.numSummedGradients += 1
 
 
-var network = newNetwork[float32](10, (5, tanh), (2, sigmoid))
+var network = newNetwork[float32](10, (5, leakyRelu), (2, identity))
 echo network.description
 var backpropInfo = newBackpropInfo[float32](network)
 
 echo network.forward(newSeq[float32](10))
 echo network.forward(newSeq[float32](10), backpropInfo)
-network.backward(@[0.5f, 0.5f], backpropInfo, calculateInputGradient = true)
+network.backward(@[-0.5f, -0.5f], backpropInfo, calculateInputGradient = true)
 echo backpropInfo
 
-network.addGradient(backpropInfo, 100.0)
+network.addGradient(backpropInfo, 1.0)
 echo network.forward(newSeq[float32](10))
+
+var network2 = network.convertTo(int16, 100.0)
+echo network2.forward(newSeq[int16](10))
