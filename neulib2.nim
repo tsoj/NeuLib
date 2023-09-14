@@ -174,7 +174,7 @@ func customLoss*[TOut: SomeNumber, TIn](
 
     for i in 0..<target.len:
         result += calculateElementLoss(target[i], output[i])
-    result /= target.len.Float
+    result /= target.len.TOut
 
 func mseGradient*[T: SomeNumber](
     target: openArray[T],
@@ -585,8 +585,9 @@ func backPropagateLayer[T: SomeNumber](
     assert outGradient.len == layer.numOutputs
     assert layerBackpropInfo.inputGradient.len == layer.numInputs
 
-    for inNeuron in 0..<layer.numInputs:
-        layerBackpropInfo.inputGradient[inNeuron] = 0
+    when calculateInputGradient:
+        for inNeuron in 0..<layer.numInputs:
+            layerBackpropInfo.inputGradient[inNeuron] = 0
 
     for outNeuron in 0..<layer.numOutputs:
         layerBackpropInfo.biasGradient[outNeuron] =
