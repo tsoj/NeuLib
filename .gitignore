@@ -1,5 +1,6 @@
 neulib*
 !neulib.nim
+!neulib2.nim
 callgrind.out.*
 mnist
 train
@@ -8,3 +9,4 @@ main-main.asm
 txt.txt
 htmldocs
 mnist_model.json
+mnist_model.bin
