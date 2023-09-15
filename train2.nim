@@ -19,7 +19,7 @@ for whatInputType in (useSparseInputs, useSparseOneInputs, useFullInputs).fields
     echo "Beginning with training ..."
     echo "Inputs: ", whatInputType
 
-    var model = newNetwork[float32](
+    var model = newNetwork(
         28*28,
         (64, relu),
         (32, relu),
@@ -89,4 +89,4 @@ for whatInputType in (useSparseInputs, useSparseOneInputs, useFullInputs).fields
         echo "Neural net decided ", fmt"{100.0*numCorrect.float/testX.len.float:.2f}", " % test cases correctly."
 
     # might want to store trained model
-    # writeFile("mnist_model.json", model.toJsonString)
+    writeFile("mnist_model.json", model.toJsonString)
