@@ -3,51 +3,49 @@ import std/[
     sequtils,
     random,
     json,
-    tables,
-    locks,
-    strformat
+    strformat,
+    streams
 ]
 
 type
-    Float* = float32
-    ActivationFunction* = object
-        f*: proc(x: Float): Float {.noSideEffect.}
-        df*: proc(x: Float): Float {.noSideEffect.}
-        name*: string
+    ActivationFunction* = enum
+        identity, relu, leakyRelu, sigmoid, tanh
     Layer* = object
-        bias*: seq[Float]
-        weights*: seq[Float]
+        bias*: seq[float32]
+        weights*: seq[float32]
         numInputs*: int
         numOutputs*: int
         activation*: ActivationFunction
     Network* = object
-        ## A fully connected neural network. Contains structure and parameters.
         layers*: seq[Layer]
-    SparseElement* = tuple[index: int, value: Float]
-    LayerBackpropInfo* = object
-        biasGradient*: seq[Float]
-        weightsGradient*: seq[Float]
-        preActivation: seq[Float]
-        postActivation: seq[Float]
-        inputGradient: seq[Float]
+    SparseElement* = tuple[index: int, value: float32]
+    SparseOneElement* = tuple[index: int]
+    LayerBackpropInfo = object
+        preActivation: seq[float32]
+        postActivation: seq[float32]
+        biasGradient: seq[float32]
+        weightsGradient: seq[float32]
+        inputGradient: seq[float32]
+    InputType = enum
+        full, sparse, sparseOnes
+    NetworkInput = object
+        case isSparseInput: InputType
+        of sparse: sparseInput: seq[SparseElement]
+        of sparseOnes: sparseOnesInput: seq[SparseOneElement]
+        of full: input: seq[float32]
     BackpropInfo* = object
-        layers*: seq[LayerBackpropInfo]
-        input: seq[Float]
-        sparseInput: seq[SparseElement]
-        numSummedGradients*: int
+        layers: seq[LayerBackpropInfo]
+        numSummedGradients: int
+        input: NetworkInput
     Moments* = object
-        lr: Float
-        beta: Float
+        lr: float32
+        beta: float32
         values: seq[Layer]
-    Nothing = enum a
-
-var
-    activationFunctions: Table[string, ActivationFunction]
-    mutexAccessActivationFunctions: Lock
+    Nothing = tuple[]
 
 #----------- Utility Functions -----------#
 
-func toSparse*(input: openArray[Float], margin: Float = 0.01): seq[SparseElement] =
+func toSparse*(input: openArray[float32], margin: float32 = 0.01): seq[SparseElement] =
     ## Returns a sparse representation of a given array. Elements that are closer to zero than `margin` will not
     ## be added to the result.
 
@@ -55,155 +53,103 @@ func toSparse*(input: openArray[Float], margin: Float = 0.01): seq[SparseElement
         if abs(a) >= margin:
             result.add((i, a))
 
-func apply*(x: var openArray[Float], y: openArray[Float], op: proc(x: var Float, y: Float) {.noSideEffect.}) =
+func toSparseOnes*(input: openArray[float32], splitAt: float32): seq[SparseOneElement] =
+    ## Returns a sparse ones representation of a given array. Elements that are bigger than or equal to `splitAt`
+    ## will be counted as ones, all other valus as zeros
+
+    for i, a in input.pairs:
+        if a >= splitAt:
+            result.add((index: i))
+
+func apply(x: var openArray[float32], y: openArray[float32], op: proc(x: var float32, y: float32) {.noSideEffect.}) =
     doAssert x.len == y.len
     for i in 0..<x.len:
         op(x[i], y[i])
 
-func `+=`*(x: var openArray[Float], y: openArray[Float]) =
-    apply(x,y, proc(x: var Float, y: Float) = x += y)
-func `-=`*(x: var openArray[Float], y: openArray[Float]) =
-    apply(x,y, proc(x: var Float, y: Float) = x -= y)
-func `*=`*(x: var openArray[Float], y: openArray[Float]) =
-    apply(x,y, proc(x: var Float, y: Float) = x *= y)
-func `/=`*(x: var openArray[Float], y: openArray[Float]) =
-    apply(x,y, proc(x: var Float, y: Float) = x /= y)
+func `+=`*(x: var openArray[float32], y: openArray[float32]) =
+    apply(x,y, proc(x: var float32, y: float32) = x += y)
+func `-=`*(x: var openArray[float32], y: openArray[float32]) =
+    apply(x,y, proc(x: var float32, y: float32) = x -= y)
+func `*=`*(x: var openArray[float32], y: openArray[float32]) =
+    apply(x,y, proc(x: var float32, y: float32) = x *= y)
+func `/=`*(x: var openArray[float32], y: openArray[float32]) =
+    apply(x,y, proc(x: var float32, y: float32) = x /= y)
 
-func `+=`*(x: var openArray[Float], y: Float) =
-    apply(x, proc(x: Float): Float = x + y)
-func `-=`*(x: var openArray[Float], y: Float) =
-    apply(x, proc(x: Float): Float = x - y)
-func `*=`*(x: var openArray[Float], y: Float) =
-    apply(x, proc(x: Float): Float = x * y)
-func `/=`*(x: var openArray[Float], y: Float) =
-    apply(x, proc(x: Float): Float = x / y)
+func `+=`*(x: var openArray[float32], y: float32) =
+    apply(x, proc(x: float32): float32 = x + y)
+func `-=`*(x: var openArray[float32], y: float32) =
+    apply(x, proc(x: float32): float32 = x - y)
+func `*=`*(x: var openArray[float32], y: float32) =
+    apply(x, proc(x: float32): float32 = x * y)
+func `/=`*(x: var openArray[float32], y: float32) =
+    apply(x, proc(x: float32): float32 = x / y)
 
-func `+`*(x, y: openArray[Float]): seq[Float] =
+func `+`*(x, y: openArray[float32]): seq[float32] =
     result &= x
     result += y
-func `-`*(x, y: openArray[Float]): seq[Float] =
+func `-`*(x, y: openArray[float32]): seq[float32] =
     result &= x
     result -= y
-func `*`*(x, y: openArray[Float]): seq[Float] =
+func `*`*(x, y: openArray[float32]): seq[float32] =
     result &= x
     result *= y
-func `/`*(x, y: openArray[Float]): seq[Float] =
+func `/`*(x, y: openArray[float32]): seq[float32] =
     result &= x
     result /= y
 
-func `+`*(x: openArray[Float], y: Float): seq[Float] =
+func `+`*(x: openArray[float32], y: float32): seq[float32] =
     result &= x
     result += y
-func `-`*(x: openArray[Float], y: Float): seq[Float] =
+func `-`*(x: openArray[float32], y: float32): seq[float32] =
     result &= x
     result -= y
-func `+`*(x: Float, y: openArray[Float]): seq[Float] =
+func `+`*(x: float32, y: openArray[float32]): seq[float32] =
     y + x
-func `-`*(x: Float, y: openArray[Float]): seq[Float] =
+func `-`*(x: float32, y: openArray[float32]): seq[float32] =
     result &= y
-    apply(result, proc(a: Float): Float = x - a)
+    apply(result, proc(a: float32): float32 = x - a)
 
-func `*`*(x: openArray[Float], y: Float): seq[Float] =
+func `*`*(x: openArray[float32], y: float32): seq[float32] =
     result &= x
     result *= y
-func `/`*(x: openArray[Float], y: Float): seq[Float] =
+func `/`*(x: openArray[float32], y: float32): seq[float32] =
     result &= x
     result /= y
-func `*`*(x: Float, y: openArray[Float]): seq[Float] =
+func `*`*(x: float32, y: openArray[float32]): seq[float32] =
     y * x
-func `/`*(x: Float, y: openArray[Float]): seq[Float] =
+func `/`*(x: float32, y: openArray[float32]): seq[float32] =
     result &= y
-    apply(result, proc(a: Float): Float = x/a)
+    apply(result, proc(a: float32): float32 = x/a)
 
 #----------- Activation and Loss Functions -----------#
 
-func newActivationFunction*(
-        f: proc(x: Float): Float {.noSideEffect.},
-        df: proc(x: Float): Float {.noSideEffect.},
-        name: string
-): ActivationFunction =
-    ## Creates and registers an activation function to be used for neural network layers.
-    ## `f` is the function, `df` is the derivative of that function, and `name` must be a unique name
-    ## for this activation function.
-    ## Cannot be run during compile time.
+func getActivationFunction*(activation: ActivationFunction): auto =
+    case activation:
+    of identity: return proc(x: float32): float32 = x
+    of relu: return proc(x: float32): float32 = (if x > 0: x else: 0)
+    of leakyRelu: return proc(x: float32): float32 = (if x > 0: x else: 0.01f * x)
+    of sigmoid: return proc(x: float32): float32 = (1.0f / (1.0f + exp(-x)))
+    of tanh: return proc(x: float32): float32 = (x.tanh)
 
-    result = ActivationFunction(f: f, df: df, name: name)
-    {.cast(noSideEffect).}:
-        withLock mutexAccessActivationFunctions:
-            doAssert not activationFunctions.hasKey(name), "Each activation function needs to have a unique name "
-            activationFunctions[name] = result
+func getActivationFunctionDerivative*(activation: ActivationFunction): auto =
+    case activation:
+    of identity: return proc(x: float32): float32 = 1.0f
+    of relu: return proc(x: float32): float32 = (if x > 0: 1 else: 0)
+    of leakyRelu: return proc(x: float32): float32 = (if x > 0: 1 else: 0.01f)
+    of sigmoid: return proc(x: float32): float32 =
+        let t = 1.0f / (1.0f + exp(-x))
+        t * (1.0f - t)
+    of tanh: return proc(x: float32): float32 = 1.0f - pow(x.tanh, 2.0f)
 
-func getActivationFunction*(name: string): ActivationFunction =
-    ## Return the activation function registered under `name`.
-
-    {.cast(noSideEffect).}:
-        withLock mutexAccessActivationFunctions:
-            doAssert(
-                activationFunctions.hasKey(name),
-                "Activation function '" & name & "' must be created using 'newActivationFunction'"
-            )
-            return activationFunctions[name]
-
-
-let sigmoid* = newActivationFunction(
-    f = proc(x: Float): Float = 1.Float / (1.Float + exp(-x)),
-    df = proc(x: Float): Float =
-        let t = 1.Float / (1.Float + exp(-x))
-        t * (1.Float - t),
-    name = "sigmoid"
-)
-
-let softplus* = newActivationFunction(
-    f = proc(x: Float): Float = ln(1.Float + exp(x)),
-    df = proc(x: Float): Float = 1.Float / (1.Float + exp(-x)),
-    name = "softplus"
-)
-
-let silu* = newActivationFunction(
-    f = proc(x: Float): Float = x / (1.Float + exp(-x)),
-    df = proc(x: Float): Float = (1.Float + exp(-x) + x * exp(-x)) / pow(1.Float + exp(-x), 2.Float),
-    name = "silu"
-)
-
-let relu* = newActivationFunction(
-    f = proc(x: Float): Float = (if x > 0: x else: 0.Float),
-    df = proc(x: Float): Float = (if x > 0: 1.Float else: 0.Float),
-    name = "relu"
-)
-
-let elu* = newActivationFunction(
-    f = proc(x: Float): Float = (if x > 0: x else: exp(x) - 1.Float),
-    df = proc(x: Float): Float = (if x > 0: 1.Float else: exp(x)),
-    name = "elu"
-)
-
-let leakyRelu* = newActivationFunction(
-    f = proc(x: Float): Float = (if x > 0: x else: 0.01.Float * x),
-    df = proc(x: Float): Float = (if x > 0: 1.Float else: 0.01.Float),
-    name = "leakyRelu"
-)
-
-let identity* = newActivationFunction(
-    f = proc(x: Float): Float = x,
-    df = proc(x: Float): Float = 1.Float,
-    name = "identity"
-)
-
-let tanh* = newActivationFunction(
-    f = proc(x: Float): Float = tanh(x),
-    df = proc(x: Float): Float = 1.Float - pow(tanh(x), 2.Float),
-    name = "tanh"
-)
-
-func customLossGradient*[T](
-    target: openArray[T],
-    output: openArray[Float],
-    calculateElementLossGradient: proc(t: T, o: Float): Float {.noSideEffect.}
-): seq[Float] =
+func customLossGradient*[TIn](
+    target: openArray[TIn],
+    output: openArray[float32],
+    calculateElementLossGradient: proc(t: TIn, o: float32): float32 {.noSideEffect.}
+): seq[float32] =
     ## Returns a custom loss gradient.
     ## `target` is the desired output vector, `output` is the actual output.
 
-    result = newSeq[Float](target.len)
+    result = newSeq[float32](target.len)
 
     assert target.len == output.len, "target.len: " & $target.len & ", output.len: " & $output.len
     assert output.len == result.len
@@ -211,11 +157,11 @@ func customLossGradient*[T](
     for i in 0..<target.len:
         result[i] = calculateElementLossGradient(target[i], output[i])
 
-func customLoss*[T](
-    target: openArray[T],
-    output: openArray[Float],
-    calculateElementLoss: proc(t: T, o: Float): Float {.noSideEffect.}
-): Float =
+func customLoss*[TIn](
+    target: openArray[TIn],
+    output: openArray[float32],
+    calculateElementLoss: proc(t: TIn, o: float32): float32 {.noSideEffect.}
+): float32 =
     ## Returns a custom loss value.
     ## `target` is the desired output vector, `output` is the actual output.
 
@@ -223,30 +169,29 @@ func customLoss*[T](
 
     for i in 0..<target.len:
         result += calculateElementLoss(target[i], output[i])
-    result /= target.len.Float
+    result /= target.len.float32
 
 func mseGradient*(
-    target: openArray[Float],
-    output: openArray[Float]
-): seq[Float] =
+    target: openArray[float32],
+    output: openArray[float32]
+): seq[float32] =
     ## Returns the gradient of the mean squared error loss function.
     ## `target` is the desired output vector, `output` is the actual output.
  
-    customLossGradient(target, output, proc(t, o: Float): Float = 2.Float * (o - t))
+    customLossGradient(target, output, proc(t, o: float32): float32 = 2.0f * (o - t))
 
 func mseLoss*(
-    target: openArray[Float],
-    output: openArray[Float]
-): Float =
+    target: openArray[float32],
+    output: openArray[float32]
+): float32 =
     ## Returns the gradient of the mean squared error loss function.
     ## `target` is the desired output vector, `output` is the actual output.
  
-    customLoss(target, output, proc(t, o: Float): Float = (o - t)*(o - t))
-
+    customLoss(target, output, proc(t, o: float32): float32 = (o - t)*(o - t))
 
 #----------- Network and Gradient Stuff  -----------#
 
-func setZero(s: var seq[Float]) =
+func setZero(s: var seq[SomeNumber]) =
     for v in s.mitems:
         v = 0
 
@@ -266,9 +211,17 @@ func newBackpropInfo*(network: Network): BackpropInfo =
         result.layers.add(LayerBackpropInfo(
             biasGradient: layer.bias,
             weightsGradient: layer.weights,
-            inputGradient: newSeq[Float](layer.numInputs)
+            inputGradient: newSeq[float32](layer.numInputs)
         ))
     result.setZero
+
+func inputGradient*(backpropInfo: BackpropInfo): seq[float32] =
+    ## Returns the input gradient that has been calculated during a backward pass (
+    ## when calling `backward <#backward,Network,openArray[float32],BackpropInfo,staticbool>`_,
+    ## the parameter `calculateInputGradient` must be set to `true`)
+
+    doAssert backpropInfo.layers.len >= 1, "BackpropInfo needs at least one input layer and one output layer"
+    backpropInfo.layers[0].inputGradient
 
 func newMoments*(network: Network, lr = 0.1, beta = 0.9): Moments =
     ## Creates `Moments` that can be used for using a gradient to optimize `network`
@@ -281,16 +234,7 @@ func newMoments*(network: Network, lr = 0.1, beta = 0.9): Moments =
     result.beta = beta
     result.lr = lr
 
-func inputGradient*(backpropInfo: BackpropInfo): seq[Float] =
-    ## Returns the input gradient that has been calculated during a backward pass.
-    ## The parameter `calculateInputGradient` must be set to `true` for that,
-    ## when calling `backward <#backward,Network,openArray[Float],BackpropInfo,staticbool>`_.
-
-    doAssert backpropInfo.layers.len >= 1, "BackpropInfo needs at least one input layer and one output layer"
-    doAssert backpropInfo.layers[0].inputGradient.len > 0, "Input gradient needs to be calculated before being used"
-    backpropInfo.layers[0].inputGradient
-
-func addGradient*(network: var Network, backpropInfo: BackpropInfo, lr: Float) =
+func addGradient*(network: var Network, backpropInfo: BackpropInfo, lr: float32) =
     ## Applies the gradient accumulated during backwards passes in `backpropInfo` to `network`.
     ## Learning rate can be specified with `lr`.
 
@@ -300,9 +244,9 @@ func addGradient*(network: var Network, backpropInfo: BackpropInfo, lr: Float) =
         assert network.layers[layerIndex].bias.len == backpropInfo.layers[layerIndex].biasGradient.len
         assert network.layers[layerIndex].weights.len == backpropInfo.layers[layerIndex].weightsGradient.len
         
-        network.layers[layerIndex].bias -= (lr / backpropInfo.numSummedGradients.Float) * backpropInfo.layers[layerIndex].biasGradient
+        network.layers[layerIndex].bias -= (lr / backpropInfo.numSummedGradients.float32) * backpropInfo.layers[layerIndex].biasGradient
 
-        network.layers[layerIndex].weights -= (lr / backpropInfo.numSummedGradients.Float) * backpropInfo.layers[layerIndex].weightsGradient
+        network.layers[layerIndex].weights -= (lr / backpropInfo.numSummedGradients.float32) * backpropInfo.layers[layerIndex].weightsGradient
 
 func addGradient*(network: var Network, backpropInfo: BackpropInfo, moments: var Moments) =
     ## Applies the gradient accumulated during backwards passes in `backpropInfo` to `network`.
@@ -320,13 +264,13 @@ func addGradient*(network: var Network, backpropInfo: BackpropInfo, moments: var
 
         moments.values[layerIndex].bias *= moments.beta
         moments.values[layerIndex].bias += 
-            ((1 - moments.beta) / backpropInfo.numSummedGradients.Float) *
+            ((1 - moments.beta) / backpropInfo.numSummedGradients.float32) *
             backpropInfo.layers[layerIndex].biasGradient
         network.layers[layerIndex].bias -= moments.lr * moments.values[layerIndex].bias
 
         moments.values[layerIndex].weights *= moments.beta
         moments.values[layerIndex].weights += 
-            ((1 - moments.beta) / backpropInfo.numSummedGradients.Float) *
+            ((1 - moments.beta) / backpropInfo.numSummedGradients.float32) *
             backpropInfo.layers[layerIndex].weightsGradient
         network.layers[layerIndex].weights -= moments.lr * moments.values[layerIndex].weights
 
@@ -334,8 +278,8 @@ func newLayer(numInputs, numOutputs: int, activation: ActivationFunction): Layer
     assert numInputs > 0 and numOutputs > 0
 
     Layer(
-        bias: newSeq[Float](numOutputs),
-        weights: newSeq[Float](numInputs * numOutputs),
+        bias: newSeq[float32](numOutputs),
+        weights: newSeq[float32](numInputs * numOutputs),
         numInputs: numInputs,
         numOutputs: numOutputs,
         activation: activation
@@ -347,12 +291,12 @@ func initKaimingNormal*(network: var Network, randState: var Rand) =
     ## <https://arxiv.org/abs/1502.01852>`_.
 
     for layer in network.layers.mitems:
-        layer.bias = newSeq[Float](layer.bias.len) # set bias to zero
+        layer.bias = newSeq[float32](layer.bias.len) # set bias to zero
 
-        let std = sqrt(2.Float / layer.numInputs.Float)
+        let std = sqrt(2.float32 / layer.numInputs.float32)
 
         for v in layer.weights.mitems:
-            v = randState.gauss(mu = 0.0, sigma = std)
+            v = randState.gauss(mu = 0.0, sigma = std.float).float32
 
 func initKaimingNormal*(network: var Network, seed: int64 = 0) =
     ## Randomly initializes the parameters of `network` using a method described in
@@ -405,37 +349,12 @@ func newNetwork*(
 
     result.initKaimingNormal(seed = 0)
 
-template subNetwork*(network: Network, slice: untyped): Network =
-    ## Creates new instance of `Network` from specified layers of an exising network.
-
-    Network(layers: network.layers[slice])
-
-func `%`(f: proc (x: Float): Float{.closure, noSideEffect.}): JsonNode =
-  newJNull()
-  
-func initFromJson(dst: var ActivationFunction, jsonNode: JsonNode, jsonPath: var string) =
-    let name = jsonNode{"name"}.getStr()
-    dst = name.getActivationFunction()
-
-func toJsonString*(network: Network): string =
-    ## Returns the JSON represenation of `network`.
-
-    {.cast(noSideEffect).}:
-        let a = %*(network)
-        pretty(a)
-
-func toNetwork*(jsonString: string): Network =
-    ## Creates a `Network` from a JSON formatted string representation.
-
-    {.cast(noSideEffect).}:
-        let jsonNode = jsonString.parseJson
-    result = to(jsonNode, Network)
-
-func `$`*(network: Network): string =
+func description*(network: Network): string =
     ## Returns a string conveying some basic information about the structure  of the network.
 
     if network.layers.len == 0:
-        return
+        return "Empty network"
+
     var maxLength = len($network.layers[0].numInputs)
     for layer in network.layers:
         maxLength = max(maxLength, len($layer.numOutputs))
@@ -451,7 +370,7 @@ func `$`*(network: Network): string =
             s &= " "
         s
 
-    result &= "input:  " & getNumberString(network.layers[0].numInputs) & " neurons\n"
+    result &= "Input:  " & getNumberString(network.layers[0].numInputs) & " neurons\n"
 
     for i, layer in network.layers.pairs:
         result &= "        "
@@ -462,14 +381,86 @@ func `$`*(network: Network): string =
         )
         let isLast = i == network.layers.len - 1
         if isLast:
-            result &= "output: "
+            result &= "Output: "
         else:
-            result &= "hidden: "
+            result &= "Hidden: "
 
-        result &= getNumberString(layer.numOutputs) & " neurons -> " & layer.activation.name
+        result &= getNumberString(layer.numOutputs) & " neurons -> " & $layer.activation
         
         if not isLast:
             result &= "\n"
+
+func toJsonString*(network: Network): string =
+    ## Returns the JSON represenation of `network`.
+
+    {.cast(noSideEffect).}:
+        let a = %*(network)
+        pretty(a)
+
+func toNetwork*(jsonString: string): Network =
+    ## Creates a `Network` from a JSON formatted string representation.
+
+    {.cast(noSideEffect).}:
+        let jsonNode = jsonString.parseJson
+    result = jsonNode.to Network
+
+proc writeSeq[float32](stream: Stream, x: seq[float32], writeProc: proc(s: Stream, x: float32)) =
+    stream.write x.len.int64
+    for a in x:
+        stream.writeProc a
+    
+proc readSeq[float32](stream: Stream, r: var seq[float32], readProc: proc(s: Stream, x: var float32)) =
+    let len = stream.readInt64
+    for i in 0..<len:
+        var element: float32
+        stream.readProc element
+        r.add element
+
+proc writeLayer(stream: Stream, layer: Layer) =
+    stream.writeSeq layer.bias, write
+    stream.writeSeq layer.weights, write
+    stream.write layer.numInputs.int64
+    stream.write layer.numOutputs.int64
+    stream.write layer.activation.int64
+    
+proc readLayer(stream: Stream, layer: var Layer) =
+    stream.readSeq layer.bias, read
+    stream.readSeq layer.weights, read
+    layer.numInputs = stream.readInt64
+    layer.numOutputs = stream.readInt64
+    layer.activation = stream.readInt64.ActivationFunction
+
+proc writeNetwork*(stream: Stream, network: Network) =
+    ## Writes the binary representation of `network` into `stream`.
+    ## Can be loaded again using `readNetwork <#readNetwork,Stream>`_.
+
+    stream.writeSeq network.layers, writeLayer
+
+proc readNetwork*(stream: Stream): Network =
+    ## Loads a network from `stream`, assuming a binary representation as created
+    ## by `writeNetwork <#writeNetwork,Stream,Network>`_.
+
+    stream.readSeq result.layers, readLayer
+
+proc saveToFile*(network: Network, fileName: string) =
+    ## Saves a binary representation of `network` into a file.
+    ## Can be loaded again using `loadNetworkFromFile <#loadNetworkFromFile,string>`_.
+
+    var fileStream = newFileStream(fileName, fmWrite)
+    if fileStream.isNil:
+        raise newException(IOError, "Couldn't open file: " & fileName)
+    fileStream.writeNetwork network
+    fileStream.close
+
+proc loadNetworkFromFile*(fileName: string): Network =
+    ## Loads a network from a binary file that has been saved 
+    ## using `saveToFile <#saveToFile,Network,string>`_.
+
+    var fileStream = newFileStream(fileName, fmRead)
+    if fileStream.isNil:
+        raise newException(IOError, "Couldn't open file: " & fileName)
+    result = fileStream.readNetwork
+    fileStream.close
 
 func weightIndex*(inNeuron, outNeuron, numInputs, numOutputs: int): int =
     outNeuron + numOutputs * inNeuron
@@ -478,81 +469,68 @@ func weightIndex*(inNeuron, outNeuron, numInputs, numOutputs: int): int =
 
 func feedForwardLayer(
     layer: Layer,
-    input: openArray[Float],
+    input: openArray[float32 or SparseElement or SparseOneElement],
     layerBackpropInfo: var (Nothing or LayerBackpropInfo)
-): seq[Float] =
-
-    assert input.len == layer.numInputs
-    assert layer.bias.len == layer.numOutputs
-    assert layer.weights.len == layer.numInputs * layer.numOutputs
-
-    result = layer.bias
-    
-    for inNeuron in 0..<layer.numInputs:
-        for outNeuron in 0..<layer.numOutputs:
-            let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
-            result[outNeuron] += layer.weights[i] * input[inNeuron]
-
-    when layerBackpropInfo isnot Nothing:
-        layerBackpropInfo.preActivation = result
-
-    for value in result.mitems:
-        value = layer.activation.f(value)
-
-    when layerBackpropInfo isnot Nothing:
-        layerBackpropInfo.postActivation = result
-
-func feedForwardLayer(
-    layer: Layer,
-    input: openArray[SparseElement],
-    layerBackpropInfo: var (Nothing or LayerBackpropInfo)
-): seq[Float] =
+): seq[float32] =
 
     assert layer.bias.len == layer.numOutputs
     assert layer.weights.len == layer.numInputs * layer.numOutputs
 
     result = layer.bias
 
-    for (inNeuron, value) in input:
-        assert inNeuron in 0..<layer.numInputs
-        for outNeuron in 0..<layer.numOutputs:
-            let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
-            result[outNeuron] += layer.weights[i] * value
+    when input is openArray[SparseElement]:
+        for (inNeuron, value) in input:
+            assert inNeuron in 0..<layer.numInputs
+            for outNeuron in 0..<layer.numOutputs:
+                let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
+                result[outNeuron] += layer.weights[i] * value
+    elif input is openArray[SparseOneElement]:
+        for (inNeuron) in input:
+            assert inNeuron in 0..<layer.numInputs
+            for outNeuron in 0..<layer.numOutputs:
+                let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
+                result[outNeuron] += layer.weights[i]
+    else:
+        assert input.len == layer.numInputs
+        for inNeuron in 0..<layer.numInputs:
+            for outNeuron in 0..<layer.numOutputs:
+                let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
+                result[outNeuron] += layer.weights[i] * input[inNeuron]
 
     when layerBackpropInfo isnot Nothing:
         layerBackpropInfo.preActivation = result
 
     for value in result.mitems:
-        value = layer.activation.f(value)
+        value = getActivationFunction(layer.activation)(value)
 
     when layerBackpropInfo isnot Nothing:
         layerBackpropInfo.postActivation = result
 
 func forwardInternal(
     network: Network,
-    input: openArray[Float] or openArray[SparseElement],
+    input: openArray[float32 or SparseElement or SparseOneElement],
     backpropInfo: var (BackpropInfo or Nothing)
-): seq[Float] =
+): seq[float32] =
 
     doAssert network.layers.len >= 1, "Network needs at least one input layer and one output layer"
 
-    result = newSeq[Float](network.layers[^1].numOutputs)
+    result = newSeq[float32](network.layers[^1].numOutputs)
 
     doAssert result.len == network.layers[^1].numOutputs, "Output size and output size of last layer must be the same"
     doAssert(
-        input.len == network.layers[0].numInputs or input isnot openArray[Float],
+        input.len == network.layers[0].numInputs or input is openArray[SparseElement or SparseOneElement],
         fmt"Input size ({input.len}) and input size of first layer ({network.layers[0].numInputs}) must be the same"
     )
 
     when backpropInfo isnot Nothing:
         doAssert backpropInfo.layers.len == network.layers.len
-        when input is openArray[Float]:
-            backpropInfo.input = input.toSeq
-            backpropInfo.sparseInput.setLen(0)
+        when input is openArray[SparseElement]:
+            backpropInfo.input = NetworkInput(isSparseInput: sparse, sparseInput: input.toSeq)
+        elif input is openArray[SparseOneElement]:
+            backpropInfo.input = NetworkInput(isSparseInput: sparseOnes, sparseOnesInput: input.toSeq)
         else:
-            backpropInfo.sparseInput = input.toSeq
-            backpropInfo.input.setLen(0)
-
+            static: doAssert input is openArray[float32]
+            backpropInfo.input = NetworkInput(isSparseInput: full, input: input.toSeq)
 
     result = feedForwardLayer(
         layer = network.layers[0],
@@ -567,109 +545,68 @@ func forwardInternal(
             layerBackpropInfo = when backpropInfo is Nothing: backpropInfo else: backpropInfo.layers[i]
         )
 
-func forward*(network: Network, input: openArray[Float], backpropInfo: var BackpropInfo): seq[Float] =
+func forward*(network: Network, input: openArray[float32 or SparseElement or SparseOneElement], backpropInfo: var BackpropInfo): seq[float32] =
     ## Runs the network with a given input. Also collects information in `backpropInfo` for a
-    ## `backward <#backward,Network,openArray[Float],BackpropInfo,staticbool>`_ pass.
+    ## `backward <#backward,Network,openArray[float32],BackpropInfo,staticbool>`_ pass.
     ## Returns a `seq` with the length according to the size of the output layer of the network.
     ## 
     ## Note: When no information for a backward pass is needed,
-    ## use `forward(Network, openArray[Float]) <#forward,Network,openArray[Float]>`_ for better performance.
+    ## use `forward(Network, openArray[]) <#forward,Network,openArray[]>`_ for better performance.
 
     network.forwardInternal(input, backpropInfo)
 
-func forward*(network: Network, input: openArray[Float]): seq[Float] =
+func forward*(network: Network, input: openArray[float32 or SparseElement or SparseOneElement]): seq[float32] =
     ## Runs the network with a given input. Does not collect information for a backward pass.
     ## Returns a `seq` with the length according to the size of the output layer of the network.
 
     var nothing: Nothing
     network.forwardInternal(input, nothing)
 
-func forward*(network: Network, input: openArray[SparseElement], backpropInfo: var BackpropInfo): seq[Float] =
-    ## Runs the network with a given sparse input. Also collects information in `backpropInfo` for a
-    ## `backward <#backward,Network,openArray[Float],BackpropInfo,staticbool>`_ pass.
-    ## Returns a `seq` with the length according to the size of the output layer of the network.
-    ## 
-    ## Note: When no information for a backward pass is needed,
-    ## use `forward(Network, openArray[SparseElement]) <#forward,Network,openArray[SparseElement]>`_ for better performance.
-
-    network.forwardInternal(input, backpropInfo)
-
-func forward*(network: Network, input: openArray[SparseElement]): seq[Float] =
-    ## Runs the network with a given sparse input. Does not collect information for a backward pass
-    ## Returns a `seq` with the length according to the size of the output layer of the network.
-    ## 
-    ## A sparse input consist of a `seq` which contains tuples of indices and values.
-    ## The indices indicate which input neuron is meant to have the according value.
-    ## Sparse inputs are especially useful if inputs often have many zero elements. Then
-    ## using sparse inputs can improve performance of the first layer significantly.
-
-    var nothing: Nothing
-    network.forwardInternal(input, nothing)
-
-#----------- Back Propagate Functions -----------#
-
-when defined(openmp):
-  {.passC: "-fopenmp".}
-  {.passL: "-fopenmp".}
-  {.pragma: omp, header:"omp.h".}
-
 func backPropagateLayer(
     layer: Layer,
-    outGradient: openArray[Float],
-    inPostActivation: openArray[Float],
-    layerBackpropInfo: var LayerBackpropInfo,
-    calculateInputGradient: bool = true
-) =
-    assert layerBackpropInfo.biasGradient.len == layer.numOutputs
-    assert layerBackpropInfo.weightsGradient.len == layer.numInputs * layer.numOutputs
-    assert outGradient.len == layer.numOutputs
-    assert inPostActivation.len == layer.numInputs
-    assert layerBackpropInfo.inputGradient.len == layer.numInputs
-
-    for inNeuron in 0..<layer.numInputs:
-        layerBackpropInfo.inputGradient[inNeuron] = 0
-
-    for outNeuron in 0..<layer.numOutputs:
-        layerBackpropInfo.biasGradient[outNeuron] =
-            layer.activation.df(layerBackpropInfo.preActivation[outNeuron]) * outGradient[outNeuron]
-
-    for inNeuron in 0..<layer.numInputs:
-        for outNeuron in 0..<layer.numOutputs:
-            let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
-            layerBackpropInfo.weightsGradient[i] +=
-                inPostActivation[inNeuron] * layerBackpropInfo.biasGradient[outNeuron]
-            if calculateInputGradient:
-                layerBackpropInfo.inputGradient[inNeuron] +=
-                    layer.weights[i] * layerBackpropInfo.biasGradient[outNeuron]
-
-func backPropagateLayer(
-    layer: Layer,
-    outGradient: openArray[Float],
-    inPostActivation: openArray[SparseElement],
+    outGradient: openArray[float32],
+    inPostActivation: openArray[float32 or SparseElement or SparseOneElement],
     layerBackpropInfo: var LayerBackpropInfo,
     calculateInputGradient: static bool = true
 ) =
     assert layerBackpropInfo.biasGradient.len == layer.numOutputs
     assert layerBackpropInfo.weightsGradient.len == layer.numInputs * layer.numOutputs
     assert outGradient.len == layer.numOutputs
-    assert inPostActivation.len == layer.numInputs or inPostActivation is openArray[SparseElement]
     assert layerBackpropInfo.inputGradient.len == layer.numInputs
 
-    for inNeuron in 0..<layer.numInputs:
-        layerBackpropInfo.inputGradient[inNeuron] = 0
+    when calculateInputGradient:
+        for inNeuron in 0..<layer.numInputs:
+            layerBackpropInfo.inputGradient[inNeuron] = 0
 
     for outNeuron in 0..<layer.numOutputs:
         layerBackpropInfo.biasGradient[outNeuron] =
-            layer.activation.df(layerBackpropInfo.preActivation[outNeuron]) * outGradient[outNeuron]
+            getActivationFunctionDerivative(layer.activation)(
+                layerBackpropInfo.preActivation[outNeuron]
+            ) * outGradient[outNeuron]
 
-    for (inNeuron, value) in inPostActivation:
-        assert inNeuron in 0..<layer.numInputs
-        for outNeuron in 0..<layer.numOutputs:
-            let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
-            layerBackpropInfo.weightsGradient[i] +=
-                value * layerBackpropInfo.biasGradient[outNeuron]
+    when inPostActivation is openArray[SparseElement]:
+        for (inNeuron, value) in inPostActivation:
+            assert inNeuron in 0..<layer.numInputs
+            for outNeuron in 0..<layer.numOutputs:
+                let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
+                layerBackpropInfo.weightsGradient[i] +=
+                    value * layerBackpropInfo.biasGradient[outNeuron]
 
-    if calculateInputGradient:
+    elif inPostActivation is openArray[SparseOneElement]:
+        for (inNeuron) in inPostActivation:
+            assert inNeuron in 0..<layer.numInputs
+            for outNeuron in 0..<layer.numOutputs:
+                let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
+                layerBackpropInfo.weightsGradient[i] += layerBackpropInfo.biasGradient[outNeuron]
+    else:
+        assert inPostActivation.len == layer.numInputs
+        for inNeuron in 0..<layer.numInputs:
+            for outNeuron in 0..<layer.numOutputs:
+                let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
+                layerBackpropInfo.weightsGradient[i] +=
+                    inPostActivation[inNeuron] * layerBackpropInfo.biasGradient[outNeuron]    
+
+    when calculateInputGradient:
         for inNeuron in 0..<layer.numInputs:
             for outNeuron in 0..<layer.numOutputs:
                 let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
@@ -678,7 +615,7 @@ func backPropagateLayer(
 
 func backward*(
     network: Network,
-    lossGradient: openArray[Float],
+    lossGradient: openArray[float32],
     backpropInfo: var BackpropInfo,
     calculateInputGradient: static bool = false
 ) =
@@ -706,10 +643,9 @@ func backward*(
             calculateInputGradient = calculateInputGradient
         )
 
-    if backpropInfo.input.len > 0:
-        propagateLast(backpropInfo.input)
-    else:
-        doAssert backpropInfo.sparseInput.len > 0, "BackpropInfo is not set up correctly for backpropagation"
-        propagateLast(backpropInfo.sparseInput)
+    case backpropInfo.input.isSparseInput:
+    of sparse: propagateLast(backpropInfo.input.sparseInput)
+    of sparseOnes: propagateLast(backpropInfo.input.sparseOnesInput)
+    of full: propagateLast(backpropInfo.input.input)
 
     backpropInfo.numSummedGradients += 1

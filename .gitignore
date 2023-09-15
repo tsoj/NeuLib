@@ -9,8 +9,4 @@ main-main.asm
 txt.txt
 htmldocs
 mnist_model.json
-test*.json
-test*.json.zip
-test*.data
-test*.bin
-test*.gzip
+mnist_model.bin
