@@ -22,7 +22,7 @@ for whatInputType in (useSparseInputs, useSparseOneInputs, useFullInputs).fields
 
     var model = newNetwork(
         28*28,
-        (1500, relu),
+        (64, relu),
         (32, relu),
         (10, sigmoid)
     )

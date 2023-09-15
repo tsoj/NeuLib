@@ -16,7 +16,7 @@ Creates a model with 784 input features, 10 sigmoid activated output features, a
 
 The model will be randomly initialized using Kaiming initialization.
 
-NeuLib already provides several common activation functions: `sigmoid`, `softplus`, `silu`, `relu`, `elu`, `leakyRelu`, `identity`, `tanh`. Custom activation functions can be added using `newActivationFunction(f, df, name)`.
+NeuLib provides several common activation functions: `sigmoid`, `relu`, `leakyRelu`, `identity`, and `tanh`.
 
 ### Execute a model
 

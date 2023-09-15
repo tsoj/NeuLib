@@ -434,13 +434,21 @@ proc writeNetwork*(stream: Stream, network: Network) =
     ## Writes the binary representation of `network` into `stream`.
     ## Can be loaded again using `readNetwork <#readNetwork,Stream>`_.
 
-    stream.writeSeq network.layers, writeLayer
+    try:
+        stream.writeSeq network.layers, writeLayer
+    except CatchableError:
+        getCurrentException().msg = "Couldn't write network: " & getCurrentException().msg
+        raise
 
 proc readNetwork*(stream: Stream): Network =
     ## Loads a network from `stream`, assuming a binary representation as created
     ## by `writeNetwork <#writeNetwork,Stream,Network>`_.
 
-    stream.readSeq result.layers, readLayer
+    try:
+        stream.readSeq result.layers, readLayer
+    except CatchableError:
+        getCurrentException().msg = "Couldn't read network: " & getCurrentException().msg
+        raise    
 
 proc saveToFile*(network: Network, fileName: string) =
     ## Saves a binary representation of `network` into a file.
