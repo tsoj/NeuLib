@@ -3,8 +3,8 @@ import neulib, mnist
 import std/[sequtils, random, times, strformat]
 
 const
-    batchSize = 15
-    lr = 0.2
+    batchSize = 1#5
+    lr = 0.04#0.2
     useMoments = false
 
 let
