@@ -65,102 +65,6 @@ func toSparseOnes*(input: openArray[float32], splitAt: float32): seq[SparseOneEl
     if a >= splitAt:
       result.add((index: i))
 
-func apply(
-    x: var openArray[float32],
-    y: openArray[float32],
-    op: proc(x: var float32, y: float32) {.noSideEffect.},
-) =
-  doAssert x.len == y.len
-  for i in 0 ..< x.len:
-    op(x[i], y[i])
-
-func `+=`*(x: var openArray[float32], y: openArray[float32]) =
-  proc op(x: var float32, y: float32) =
-    x += y
-
-  apply(x, y, op)
-func `-=`*(x: var openArray[float32], y: openArray[float32]) =
-  proc op(x: var float32, y: float32) =
-    x -= y
-
-  apply(x, y, op)
-func `*=`*(x: var openArray[float32], y: openArray[float32]) =
-  proc op(x: var float32, y: float32) =
-    x *= y
-
-  apply(x, y, op)
-func `/=`*(x: var openArray[float32], y: openArray[float32]) =
-  proc op(x: var float32, y: float32) =
-    x /= y
-
-  apply(x, y, op)
-
-func `+=`*(x: var openArray[float32], y: float32) =
-  proc op(x: float32): float32 =
-    x + y
-
-  apply(x, op)
-func `-=`*(x: var openArray[float32], y: float32) =
-  proc op(x: float32): float32 =
-    x - y
-
-  apply(x, op)
-func `*=`*(x: var openArray[float32], y: float32) =
-  proc op(x: float32): float32 =
-    x * y
-
-  apply(x, op)
-func `/=`*(x: var openArray[float32], y: float32) =
-  proc op(x: float32): float32 =
-    x / y
-
-  apply(x, op)
-
-func `+`*(x, y: openArray[float32]): seq[float32] =
-  result &= x
-  result += y
-func `-`*(x, y: openArray[float32]): seq[float32] =
-  result &= x
-  result -= y
-func `*`*(x, y: openArray[float32]): seq[float32] =
-  result &= x
-  result *= y
-func `/`*(x, y: openArray[float32]): seq[float32] =
-  result &= x
-  result /= y
-
-func `+`*(x: openArray[float32], y: float32): seq[float32] =
-  result &= x
-  result += y
-func `-`*(x: openArray[float32], y: float32): seq[float32] =
-  result &= x
-  result -= y
-func `+`*(x: float32, y: openArray[float32]): seq[float32] =
-  y + x
-func `-`*(x: float32, y: openArray[float32]): seq[float32] =
-  result &= y
-  proc op(a: float32): float32 =
-    x - a
-
-  apply(result, op)
-
-func `*`*(x: openArray[float32], y: float32): seq[float32] =
-  result &= x
-  result *= y
-func `/`*(x: openArray[float32], y: float32): seq[float32] =
-  result &= x
-  result /= y
-func `*`*(x: float32, y: openArray[float32]): seq[float32] =
-  y * x
-func `/`*(x: float32, y: openArray[float32]): seq[float32] =
-  result &= y
-  apply(
-    result,
-    proc(a: float32): float32 =
-      x / a
-    ,
-  )
-
 #----------- Activation and Loss Functions -----------#
 
 func getActivationFunction*(activation: ActivationFunction): auto =
@@ -616,7 +520,7 @@ func backPropagateLayer(
         layerBackpropInfo.preActivation[outNeuron]
       ) * outGradient[outNeuron]
 
-    layer.bias -= biasGradient[outNeuron] * lr
+    layer.bias[outNeuron] -= biasGradient[outNeuron] * lr
 
   when calculateInputGradient:
     layerBackpropInfo.inputGradient = newSeq[float32](layer.numInputs)

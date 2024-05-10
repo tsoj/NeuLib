@@ -37,26 +37,18 @@ let output = model.forward(sparseInput)
 ```nim
 # First, create a new variable that can
 # hold the necessary training information
-var backpropInfo = model.newBackpropInfo()
+var backpropInfo: BackpropInfo
 
-for each epoch:
-    for batch in batches:
-        # Before each new gradient calculation,
-        # reset backpropInfo
-        backpropInfo.setZero
-
-        for (input, target) in batch:
-            # Execute the model, but also pass
-            # backpropInfo to collect information
-            # necessary for gradient calculation
-            let output = model.forward(input, backpropInfo)
-            let lossGradient = mseGradient(target, output)
-            # Run a backwards pass to create the
-            # gradient and add it to backpropInfo
-            model.backward(lossGradient, backpropInfo)
-
-        # Apply the calculated gradient to the model
-        model.addGradient(backpropInfo, lr = 0.2)
+for epoch in epochs:
+  for (input, target) in data:
+    # Execute the model, but also pass
+    # backpropInfo to collect information
+    # necessary for gradient calculation
+    let output = model.forward(input, backpropInfo)
+    let lossGradient = mseGradient(target, output)
+    # Run a backwards pass to calculate the
+    # gradient and add it to the model using a learning rate
+    model.backward(lossGradient, backpropInfo, lr = 0.01)
 ```
 
 ### Store and load models
