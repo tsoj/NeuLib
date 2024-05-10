@@ -164,13 +164,9 @@ func mseLoss*(target: openArray[float32], output: openArray[float32]): float32 =
 
 #----------- Network and Gradient Stuff  -----------#
 
-func setZero(s: var seq[SomeNumber]) =
-  for v in s.mitems:
-    v = 0
-
 func inputGradient*(backpropInfo: BackpropInfo): seq[float32] =
   ## Returns the input gradient that has been calculated during a backward pass (
-  ## when calling `backward <#backward,Network,openArray[float32],BackpropInfo,staticbool>`_,
+  ## when calling `backward <#backward,Network,openArray[float32],BackpropInfo,float32,staticbool>`_,
   ## the parameter `calculateInputGradient` must be set to `true`)
 
   doAssert backpropInfo.layers.len >= 1,
@@ -486,7 +482,7 @@ func forward*(
     backpropInfo: var BackpropInfo,
 ): seq[float32] =
   ## Runs the network with a given input. Also collects information in `backpropInfo` for a
-  ## `backward <#backward,Network,openArray[float32],BackpropInfo,staticbool>`_ pass.
+  ## `backward <#backward,Network,openArray[float32],BackpropInfo,float32,staticbool>`_ pass.
   ## Returns a `seq` with the length according to the size of the output layer of the network.
   ## 
   ## Note: When no information for a backward pass is needed,

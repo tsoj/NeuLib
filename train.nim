@@ -4,7 +4,7 @@ import std/[sequtils, random, times, strformat, math]
 
 const
   startLr = 0.05
-  finalLr = 0.01
+  finalLr = 0.001
   numEpochs = 10
 
 let
