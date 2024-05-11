@@ -24,7 +24,7 @@ type
     inputGradient: seq[float32]
 
   SparseElement* = tuple[index: int, value: float32]
-  SparseOneElement* = tuple[index: int]
+  SparseOneElement* = int
   InputType = enum
     full
     sparse
@@ -63,7 +63,7 @@ func toSparseOnes*(input: openArray[float32], splitAt: float32): seq[SparseOneEl
 
   for i, a in input.pairs:
     if a >= splitAt:
-      result.add((index: i))
+      result.add(i)
 
 #----------- Activation and Loss Functions -----------#
 
@@ -402,7 +402,7 @@ func feedForwardLayer(
         let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
         result[outNeuron] += layer.weights[i] * value
   elif input is openArray[SparseOneElement]:
-    for (inNeuron) in input:
+    for inNeuron in input:
       assert inNeuron in 0 ..< layer.numInputs
       for outNeuron in 0 ..< layer.numOutputs:
         let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
@@ -534,7 +534,7 @@ func backPropagateLayer(
         let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
         layer.weights[i] -= value * biasGradient[outNeuron] * lr
   elif inPostActivation is openArray[SparseOneElement]:
-    for (inNeuron) in inPostActivation:
+    for inNeuron in inPostActivation:
       assert inNeuron in 0 ..< layer.numInputs
       for outNeuron in 0 ..< layer.numOutputs:
         let i = weightIndex(inNeuron, outNeuron, layer.numInputs, layer.numOutputs)
